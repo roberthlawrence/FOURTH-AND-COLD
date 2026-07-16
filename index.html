@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>4th &amp; Cold Squares</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header id="topBar">
+  <div id="brand">
+    <span id="brandKick">4TH &amp; COLD</span>
+    <span id="brandSeason">SQUARES</span>
+  </div>
+  <div id="userChip" class="hidden">
+    <span id="userChipName"></span>
+    <button id="switchUserBtn" class="linkBtn" type="button">switch</button>
+  </div>
+  <button id="adminLoginBtn" class="ghostBtn" type="button">Admin</button>
+</header>
+
+<!-- ============ WELCOME / IDENTITY ============ -->
+<section id="welcomePanel" class="panel hidden">
+  <h1 class="displayHead">CLAIM YOUR<br/>SQUARES</h1>
+  <p id="welcomeBlurb" class="blurb"></p>
+  <div class="fieldStack">
+    <label for="wFullName">Full name</label>
+    <input id="wFullName" type="text" autocomplete="name" placeholder="Bevo Longhorn" />
+    <label for="wEmail">Email</label>
+    <input id="wEmail" type="email" autocomplete="email" placeholder="bevo@utexas.edu" />
+    <button id="enterBoardBtn" class="primaryBtn" type="button">Enter the board</button>
+    <p class="finePrint">Your email links your squares to you all season. Use the same one everywhere.</p>
+  </div>
+</section>
+
+<!-- ============ MAIN APP ============ -->
+<main id="app" class="hidden">
+
+  <!-- Game selector -->
+  <nav id="gameTabs" aria-label="Games"></nav>
+
+  <!-- Live / game status strip -->
+  <section id="scoreStrip" class="hidden">
+    <div class="scoreTeam">
+      <span class="scoreLabel">TEXAS</span>
+      <span id="scoreTexas" class="scoreNum">0</span>
+    </div>
+    <div id="scoreMid">
+      <span id="scoreClock"></span>
+      <span id="scoreQtr"></span>
+    </div>
+    <div class="scoreTeam">
+      <span id="scoreOppLabel" class="scoreLabel">OPP</span>
+      <span id="scoreOpp" class="scoreNum">0</span>
+    </div>
+  </section>
+
+  <!-- Board -->
+  <section id="boardSection">
+    <div id="boardMeta">
+      <span id="boardTitle"></span>
+      <span id="boardStatus"></span>
+    </div>
+    <div id="boardScroll">
+      <table id="board" aria-label="Squares board"></table>
+    </div>
+    <div id="boardLegend">
+      <span><i class="lg lgOpen"></i> Open</span>
+      <span><i class="lg lgTaken"></i> Taken</span>
+      <span><i class="lg lgMine"></i> Yours</span>
+      <span><i class="lg lgWin"></i> Winner</span>
+    </div>
+  </section>
+
+  <!-- My squares -->
+  <section id="myPanel" class="panel hidden">
+    <h2 class="sectionHead">Your squares</h2>
+    <div id="mySquaresList"></div>
+    <div id="myBalance"></div>
+    <div id="venmoBox"></div>
+  </section>
+
+  <!-- Winners ledger -->
+  <section id="winnersPanel" class="panel">
+    <h2 class="sectionHead">Winners ledger</h2>
+    <div id="winnersList"></div>
+  </section>
+
+  <!-- Pot tracker -->
+  <section id="potPanel" class="panel">
+    <h2 class="sectionHead">The pot</h2>
+    <div id="potBars"></div>
+  </section>
+
+  <!-- ============ ADMIN ============ -->
+  <section id="adminPanel" class="panel hidden">
+    <h2 class="sectionHead">Admin — <span id="adminWho"></span></h2>
+
+    <div class="adminGroup">
+      <h3>Board</h3>
+      <div class="btnRow">
+        <button id="lockBtn" class="primaryBtn" type="button">Lock board</button>
+        <button id="unlockBtn" class="primaryBtn hidden" type="button">Unlock board</button>
+      </div>
+    </div>
+
+    <div class="adminGroup">
+      <h3>Numbers — <span id="drawGameName"></span></h3>
+      <p class="finePrint">Draws digits for the selected game. Do it live — the shuffle animates for everyone watching.</p>
+      <div class="btnRow">
+        <button id="drawBtn" class="primaryBtn" type="button">Draw numbers</button>
+        <button id="redrawBtn" class="dangerBtn hidden" type="button">Re-draw</button>
+      </div>
+    </div>
+
+    <div class="adminGroup">
+      <h3>Scores &amp; winners</h3>
+      <div class="fieldRow">
+        <label for="espnIdInput">ESPN game ID</label>
+        <input id="espnIdInput" type="text" inputmode="numeric" placeholder="auto" />
+        <button id="saveEspnIdBtn" class="ghostBtn" type="button">Save</button>
+        <button id="findEspnIdBtn" class="ghostBtn" type="button">Auto-find</button>
+      </div>
+      <div class="btnRow">
+        <button id="pullScoresBtn" class="primaryBtn" type="button">Pull scores &amp; record winners</button>
+      </div>
+      <div id="pullResult" class="finePrint"></div>
+    </div>
+
+    <div class="adminGroup">
+      <h3>Payments</h3>
+      <div id="payTableWrap"></div>
+    </div>
+
+    <div class="adminGroup">
+      <h3>Season setup</h3>
+      <button id="seasonToggleBtn" class="ghostBtn" type="button">Open season settings</button>
+      <div id="seasonForm" class="hidden">
+        <label for="cfgSeasonName">Season name</label>
+        <input id="cfgSeasonName" type="text" />
+        <label for="cfgPrice">Price per square ($)</label>
+        <input id="cfgPrice" type="number" inputmode="numeric" />
+        <label for="cfgPayout">Payout per win ($)</label>
+        <input id="cfgPayout" type="number" inputmode="numeric" />
+        <label for="cfgAdmins">Admin emails (comma-separated)</label>
+        <input id="cfgAdmins" type="text" />
+        <label for="cfgVenmo">Venmo lines (one per line: handle | note)</label>
+        <textarea id="cfgVenmo" rows="3"></textarea>
+        <label for="cfgBlurb">Welcome blurb</label>
+        <textarea id="cfgBlurb" rows="3"></textarea>
+        <h4>Games (6)</h4>
+        <div id="cfgGames"></div>
+        <div class="btnRow">
+          <button id="fetchScheduleBtn" class="ghostBtn" type="button">Fetch Texas home schedule</button>
+        </div>
+        <div class="btnRow">
+          <button id="saveSeasonBtn" class="primaryBtn" type="button">Save season</button>
+          <button id="clearBoardBtn" class="dangerBtn" type="button">Clear all squares</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer id="foot">
+    <span>4th &amp; Cold · Hook 'em 🤘</span>
+  </footer>
+</main>
+
+<!-- Claim / edit modal -->
+<div id="modalOverlay" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div id="modal">
+    <h2 id="modalTitle">Claim this square</h2>
+    <p id="modalSub" class="finePrint"></p>
+    <label for="sqNameInput">Square name (shows on the board)</label>
+    <input id="sqNameInput" type="text" maxlength="18" placeholder="Rob&amp;Laura" />
+    <p id="modalHelp" class="finePrint"></p>
+    <div id="modalBtns">
+      <button id="modalReleaseBtn" class="dangerBtn hidden" type="button">Release square</button>
+      <button id="modalCancelBtn" class="ghostBtn" type="button">Cancel</button>
+      <button id="modalSaveBtn" class="primaryBtn" type="button">Claim</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

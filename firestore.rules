@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function cfg() {
+      return get(/databases/$(database)/documents/config/current).data;
+    }
+    function isAdmin() {
+      return request.auth != null
+        && 'email' in request.auth.token
+        && request.auth.token.email.lower() in cfg().adminEmails;
+    }
+    function boardOpen() {
+      return cfg().boardLocked == false;
+    }
+
+    // ---- season config: public read, admin write.
+    // Bootstrap: any Google-signed-in user may CREATE it once (first-run setup).
+    match /config/current {
+      allow read: if true;
+      allow create: if request.auth != null && 'email' in request.auth.token;
+      allow update, delete: if isAdmin();
+    }
+
+    // ---- squares: public read; create when board open; edit/release by
+    // the claiming device (uid) while open, or by an admin any time.
+    match /squares/{squareId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && boardOpen()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.row is int
+        && request.resource.data.col is int
+        && request.resource.data.row >= 1 && request.resource.data.row <= 10
+        && request.resource.data.col >= 1 && request.resource.data.col <= 10
+        && squareId == string(request.resource.data.row) + '_' + string(request.resource.data.col)
+        && request.resource.data.squareName is string
+        && request.resource.data.squareName.size() >= 1
+        && request.resource.data.squareName.size() <= 18
+        && request.resource.data.fullName is string
+        && request.resource.data.fullName.size() >= 1
+        && request.resource.data.email is string
+        && request.resource.data.email.size() >= 3;
+      allow update: if isAdmin()
+        || (request.auth != null
+            && boardOpen()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['squareName'])
+            && request.resource.data.squareName.size() >= 1
+            && request.resource.data.squareName.size() <= 18);
+      allow delete: if isAdmin()
+        || (request.auth != null && boardOpen() && resource.data.uid == request.auth.uid);
+    }
+
+    // ---- games: public read (numbers + winners are public); admin write.
+    match /games/{gameId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ---- payments: private. Admin only.
+    match /payments/{payId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
