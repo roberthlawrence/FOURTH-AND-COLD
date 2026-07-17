@@ -59,8 +59,12 @@
     </div>
   </section>
 
+  <!-- Winner congratulations banner -->
+  <section id="winnerBanner" class="panel hidden"></section>
+
   <!-- Board -->
   <section id="boardSection">
+    <div id="periodStrip"></div>
     <div id="boardMeta">
       <span id="boardTitle"></span>
       <span id="boardStatus"></span>
@@ -166,6 +170,7 @@
         <select id="cfgSport">
           <option value="cfb">Texas Football (real season — 4 quarters)</option>
           <option value="soccer">Soccer test — FIFA World Cup (2 halves)</option>
+          <option value="mlb">Baseball test — Texas Rangers (first 4 innings)</option>
         </select>
         <label for="cfgSeasonName">Season name</label>
         <input id="cfgSeasonName" type="text" />
@@ -186,7 +191,7 @@
         <h4>Games</h4>
         <div id="cfgGames"></div>
         <div class="btnRow">
-          <button id="fetchScheduleBtn" class="ghostBtn" type="button">Fetch Texas home schedule</button>
+          <button id="fetchScheduleBtn" class="ghostBtn" type="button">Fetch schedule from ESPN</button>
         </div>
         <div class="btnRow">
           <button id="saveSeasonBtn" class="primaryBtn" type="button">Save season</button>

@@ -25,12 +25,18 @@ const GRID = 10;
 const ESPN_ROOT = "https://site.api.espn.com/apis/site/v2/sports";
 const ESPN = ESPN_ROOT + "/football/college-football";
 const TEXAS_TEAM_ID = "251";
-const soccerMode = () => cfg?.sportMode === "soccer";
-const espnBase = () => soccerMode() ? ESPN_ROOT + "/soccer/fifa.world" : ESPN;
+const MLB_TEAM_ID = "13"; // Texas Rangers
+const sportMode = () => cfg?.sportMode || "cfb";
+const soccerMode = () => sportMode() === "soccer";
+const mlbMode = () => sportMode() === "mlb";
+const espnBase = () =>
+  soccerMode() ? ESPN_ROOT + "/soccer/fifa.world" :
+  mlbMode() ? ESPN_ROOT + "/baseball/mlb" : ESPN;
 const numPeriods = () => soccerMode() ? 2 : 4;
-const periodLabel = (q) => soccerMode()
-  ? (q === 1 ? "HALF" : "FINAL")
-  : (q === 4 ? "FINAL" : "Q" + q);
+const periodLabel = (q) =>
+  soccerMode() ? (q === 1 ? "HALF" : "FINAL") :
+  mlbMode() ? "INN " + q :
+  (q === 4 ? "FINAL" : "Q" + q);
 const LIVE_POLL_MS = 60_000;
 /* College season runs Aug–Jan; in Jan the "season" is still last year's */
 function seasonYear() {
@@ -51,6 +57,40 @@ async function fetchTexasSchedule() {
   }
   return { events: [] };
 }
+/* World Cup has no "team schedule" — sweep the tournament scoreboard across a
+   date window (recent results + upcoming matches) */
+async function fetchWorldCupMatches() {
+  const DAY = 86400000;
+  const fmt = (t) => {
+    const d = new Date(t);
+    return d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
+  };
+  const start = Date.now() - 12 * DAY, end = Date.now() + 14 * DAY;
+  const seen = new Set(), events = [];
+  const collect = (data) => (data?.events || []).forEach(e => {
+    if (!seen.has(e.id)) { seen.add(e.id); events.push(e); }
+  });
+  // Try the date-range form first (one request)…
+  try {
+    const res = await fetch(`${ESPN_ROOT}/soccer/fifa.world/scoreboard?dates=${fmt(start)}-${fmt(end)}`);
+    collect(await res.json());
+  } catch (_) {}
+  // …fall back to per-day requests in parallel
+  if (!events.length) {
+    const days = [];
+    for (let t = start; t <= end; t += DAY) days.push(t);
+    const results = await Promise.allSettled(days.map(t =>
+      fetch(`${ESPN_ROOT}/soccer/fifa.world/scoreboard?dates=${fmt(t)}`).then(r => r.json())
+    ));
+    results.forEach(r => { if (r.status === "fulfilled") collect(r.value); });
+  }
+  events.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  return events.map(e => ({
+    opponent: e.name || e.shortName || "Match",
+    date: (e.date || "").slice(0, 10),
+    espnEventId: e.id
+  }));
+}
 
 let me = { fullName: "", email: "" };     // player identity (honor system, uid-backed)
 let uid = null;
@@ -63,6 +103,8 @@ let liveTimer = null;
 let liveState = null;                     // latest ESPN pull for active game
 let unsubGames = null, unsubSquares = null, unsubCfg = null, unsubPay = null;
 let payments = new Map();                 // email -> payment doc
+let payouts = new Map();                  // "gameId_qN" -> payout confirmation doc
+let unsubPayouts = null;
 let highlightEmail = null;                // payment-admin highlight: whose squares glow blue
 
 /* ---------------- tiny DOM helpers ---------------- */
@@ -136,7 +178,12 @@ function startListeners() {
     qs.forEach(d => games.push({ id: d.id, ...d.data() }));
     games.sort((a, b) => (a.order || 0) - (b.order || 0));
     if (!activeGameId && games.length) activeGameId = defaultGame().id;
-    renderTabs(); renderBoard(); renderWinners(); renderAdminGame(); renderPot();
+    renderTabs(); renderBoard(); renderWinners(); renderAdminGame(); renderPot(); renderWinnerBanner();
+  });
+  unsubPayouts = onSnapshot(collection(db, "payouts"), (qs) => {
+    payouts.clear();
+    qs.forEach(d => payouts.set(d.id, d.data()));
+    renderWinners(); renderWinnerBanner();
   });
 }
 
@@ -221,7 +268,7 @@ $("enterBoardBtn").onclick = () => {
   me = { fullName: n, email: e };
   saveIdentity();
   route();
-  renderBoard(); renderMyPanel();
+  renderBoard(); renderMyPanel(); renderWinnerBanner();
 };
 $("switchUserBtn").onclick = () => {
   localStorage.removeItem("fc_name"); localStorage.removeItem("fc_email");
@@ -282,8 +329,48 @@ function renderTabs() {
 /* ---------------- board render ---------------- */
 function currentGame() { return games.find(g => g.id === activeGameId) || null; }
 
+/* Per-period scores + winners pinned above the board, so "which period did I
+   win?" (and double wins) is obvious at a glance */
+function renderPeriodStrip(g) {
+  const strip = $("periodStrip");
+  strip.innerHTML = "";
+  if (!g) return;
+  let anyContent = false;
+  for (let q = 1; q <= numPeriods(); q++) {
+    const w = g.winners?.["q" + q];
+    const chip = el("div", "perChip");
+    chip.appendChild(el("span", "pcLabel", periodLabel(q)));
+    if (w) {
+      anyContent = true;
+      chip.classList.add("hasWin");
+      chip.appendChild(el("span", "pcScore", `${w.texasScore}–${w.oppScore}`));
+      if (w.empty) {
+        chip.appendChild(el("span", "pcWho empty", "→ tailgate"));
+      } else {
+        chip.appendChild(el("span", "pcWho", w.squareName));
+        if (me.email && w.email === me.email) {
+          chip.classList.add("myWin");
+          chip.title = "You won this one!";
+        }
+      }
+    } else if (liveState && liveState.gameId === g.id && liveState.inProgress && liveState.period === q) {
+      // The period currently being played shows the live score
+      anyContent = true;
+      chip.appendChild(el("span", "pcScore", `${liveState.texasScore}–${liveState.oppScore}`));
+      chip.appendChild(el("span", "pcWho empty", "live"));
+    } else {
+      chip.appendChild(el("span", "pcScore", "–"));
+      chip.appendChild(el("span", "pcWho empty", ""));
+    }
+    strip.appendChild(chip);
+  }
+  // Nothing recorded and nothing live? Hide the strip to keep pre-game clean.
+  if (!anyContent) strip.innerHTML = "";
+}
+
 function renderBoard() {
   const g = currentGame();
+  renderPeriodStrip(g);
   const board = $("board");
   board.innerHTML = "";
   // Column sizing: vertical axis bar, digit rail, then the 10 squares
@@ -293,14 +380,14 @@ function renderBoard() {
   for (let i = 0; i < GRID; i++) cg.appendChild(el("col"));
   board.appendChild(cg);
   $("boardTitle").textContent = g
-    ? (soccerMode() ? (g.opponent || "TBD") : "TEXAS vs " + (g.opponent || "TBD"))
+    ? ((soccerMode() || mlbMode()) ? (g.opponent || "TBD") : "TEXAS vs " + (g.opponent || "TBD"))
     : "Board";
   $("boardStatus").textContent = cfg?.boardLocked ? "Board locked" : "Board open — tap a square";
 
   const cols = g?.texasDigits || null;   // TEXAS/home digits across the top
   const rows = g?.oppDigits || null;     // OPPONENT/away digits down the side
-  const topName = soccerMode() ? "HOME" : "TEXAS";
-  const sideName = soccerMode() ? "AWAY" : (g?.opponent || "OPPONENT");
+  const topName = (soccerMode() || mlbMode()) ? "HOME" : "TEXAS";
+  const sideName = (soccerMode() || mlbMode()) ? "AWAY" : (g?.opponent || "OPPONENT");
 
   // Big top-axis team bar (burnt orange)
   const axisRow = el("tr");
@@ -495,6 +582,8 @@ function winnerKeysForGame(g) {
   Object.values(g.winners).forEach(w => { if (w?.key) set.add(w.key); });
   return set;
 }
+const payoutId = (gameId, q) => `${gameId}_q${q}`;
+
 function renderWinners() {
   const list = $("winnersList");
   list.innerHTML = "";
@@ -515,10 +604,85 @@ function renderWinners() {
       ? `${w.texasScore} — ${w.oppScore}`
       : `TEX ${w.texasScore} — ${g.opponent || "OPP"} ${w.oppScore}`));
     row.appendChild(mid);
-    row.appendChild(el("span", "winPay", w.empty ? "→ tailgate" : money(cfg?.payoutPerWin)));
+    // Right column: amount + payout status / admin controls
+    const payCol = el("div", "payCol");
+    payCol.appendChild(el("span", "winPay", w.empty ? "→ tailgate" : money(cfg?.payoutPerWin)));
+    if (!w.empty) {
+      const p = payouts.get(payoutId(g.id, idx + 1));
+      if (p?.paid) {
+        const badge = el("span", "payBadge sent", "PAID ✓");
+        if (isAdmin()) {
+          badge.title = "Tap to undo";
+          badge.style.cursor = "pointer";
+          badge.onclick = async () => {
+            if (!confirm(`Undo payout confirmation for ${w.squareName}?`)) return;
+            try {
+              await deleteDoc(doc(db, "payouts", payoutId(g.id, idx + 1)));
+              audit("payout.undo", `${g.opponent || g.id} ${periodLabel(idx + 1)} — ${w.fullName} (${w.email})`);
+              toast("Payout confirmation removed.");
+            } catch (err) { toast(friendlyErr(err)); }
+          };
+        }
+        payCol.appendChild(badge);
+      } else if (isAdmin()) {
+        const btn = el("button", "markPaidBtn", "Mark paid");
+        btn.type = "button";
+        btn.onclick = async () => {
+          if (!confirm(`Confirm ${money(cfg?.payoutPerWin)} sent to ${w.fullName} for ${periodLabel(idx + 1)}?`)) return;
+          try {
+            await setDoc(doc(db, "payouts", payoutId(g.id, idx + 1)), {
+              gameId: g.id, period: idx + 1,
+              email: w.email, fullName: w.fullName, squareName: w.squareName,
+              amount: cfg?.payoutPerWin || 0,
+              paid: true, paidBy: adminEmail, paidAt: serverTimestamp()
+            });
+            audit("payout.sent", `${g.opponent || g.id} ${periodLabel(idx + 1)} — ${money(cfg?.payoutPerWin)} to ${w.fullName} (${w.email})`);
+            toast("Payout marked as sent.");
+          } catch (err) { toast(friendlyErr(err)); }
+        };
+        payCol.appendChild(btn);
+      } else {
+        payCol.appendChild(el("span", "payBadge proc", "processing"));
+      }
+    }
+    row.appendChild(payCol);
     list.appendChild(row);
   });
   if (!any) list.appendChild(el("div", "emptyNote", "No winners recorded yet for this game."));
+}
+
+/* Congratulations banner for signed-in winners, across all games */
+function renderWinnerBanner() {
+  const banner = $("winnerBanner");
+  if (!me.email) { banner.classList.add("hidden"); return; }
+  const wins = [];
+  games.forEach(g => {
+    Object.entries(g.winners || {}).forEach(([qKey, w]) => {
+      if (!w || w.empty || w.email !== me.email) return;
+      const q = Number(qKey.slice(1));
+      wins.push({ g, q, w, payout: payouts.get(payoutId(g.id, q)) });
+    });
+  });
+  if (!wins.length) { banner.classList.add("hidden"); return; }
+  banner.classList.remove("hidden");
+  banner.innerHTML = "";
+  const firstName = (me.fullName || "").split(/\s+/)[0] || "champ";
+  banner.appendChild(el("h2", "bannerHead", `🎉 Congratulations, ${firstName}!`));
+  const total = wins.length * (cfg?.payoutPerWin || 0);
+  banner.appendChild(el("p", "bannerSub",
+    `${wins.length} win${wins.length === 1 ? "" : "s"} this season — ${money(total)} total.`));
+  wins.forEach(({ g, q, payout }) => {
+    const line = el("div", "bannerWin");
+    line.appendChild(el("span", null, `${g.opponent || g.id} · ${periodLabel(q)} · ${money(cfg?.payoutPerWin)}`));
+    line.appendChild(el("span", "payBadge " + (payout?.paid ? "sent" : "proc"),
+      payout?.paid ? "PAYMENT SENT ✓" : "processing"));
+    banner.appendChild(line);
+  });
+  if (wins.some(x => !x.payout?.paid)) {
+    const handles = (cfg?.venmo || []).map(v => "@" + v.handle).join(", ");
+    banner.appendChild(el("p", "bannerNote",
+      `Your payout is processing${handles ? " — reach out to " + handles + " with any questions" : ""}.`));
+  }
 }
 
 /* ---------------- pot tracker ---------------- */
@@ -589,6 +753,12 @@ async function resolveEventId(g) {
       });
       return best ? best.id : null;
     }
+    if (mlbMode()) {
+      const res = await fetch(`${ESPN_ROOT}/baseball/mlb/teams/${MLB_TEAM_ID}/schedule`);
+      const data = await res.json();
+      const ev = (data.events || []).find(e => (e.date || "").slice(0, 10) === g.date);
+      return ev ? ev.id : null;
+    }
     const data = await fetchTexasSchedule();
     const ev = (data.events || []).find(e => (e.date || "").slice(0, 10) === g.date);
     return ev ? ev.id : null;
@@ -596,7 +766,7 @@ async function resolveEventId(g) {
 }
 function pickCompetitors(comp) {
   let texas, opp;
-  if (soccerMode()) {
+  if (soccerMode() || mlbMode()) {
     texas = comp.competitors.find(c => c.homeAway === "home");
     opp = comp.competitors.find(c => c.homeAway === "away");
   } else {
@@ -604,6 +774,86 @@ function pickCompetitors(comp) {
     opp = comp.competitors.find(c => c !== texas);
   }
   return { texas, opp };
+}
+/* Rangers schedule, trimmed to a recent/upcoming window for the dropdowns */
+async function fetchRangersWindow() {
+  const DAY = 86400000;
+  const lo = Date.now() - 12 * DAY, hi = Date.now() + 14 * DAY;
+  try {
+    const res = await fetch(`${ESPN_ROOT}/baseball/mlb/teams/${MLB_TEAM_ID}/schedule`);
+    const data = await res.json();
+    return (data.events || [])
+      .filter(e => { const t = Date.parse(e.date); return t >= lo && t <= hi; })
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
+      .map(e => ({
+        opponent: e.shortName || e.name || "Game",
+        date: (e.date || "").slice(0, 10),
+        espnEventId: e.id
+      }));
+  } catch (_) { return []; }
+}
+/* Compute completed-period winners from an ESPN summary competition object.
+   Shared by the manual Pull button and the live auto-recorder. */
+function computePeriodWinners(g, comp) {
+  const { texas, opp } = pickCompetitors(comp);
+  if (!texas || !opp || !g.texasDigits || !g.oppDigits) return {};
+  const tLines = (texas.linescores || []).map(l => Number(l.displayValue ?? l.value ?? 0));
+  const oLines = (opp.linescores || []).map(l => Number(l.displayValue ?? l.value ?? 0));
+  const state = comp.status?.type?.state;
+  const detail = comp.status?.type?.detail || comp.status?.type?.shortDetail || "";
+  const period = comp.status?.period || tLines.length;
+  const nPer = numPeriods();
+  let completed = Math.min(tLines.length, oLines.length);
+  if (state === "in" && period <= completed) completed = period - 1;
+  if (soccerMode() && state === "in" && /half\s*-?\s*time|^ht$/i.test(detail)) completed = 1;
+  // Final: soccer/CFB record all periods; MLB records however many of the
+  // first 4 innings the linescores show (they'll all be there for a final)
+  if (state === "post") completed = mlbMode() ? Math.min(nPer, completed) : nPer;
+  const out = {};
+  let tSum = 0, oSum = 0;
+  for (let q = 1; q <= Math.min(completed, nPer); q++) {
+    if (soccerMode() && q === nPer && state === "post") {
+      // Soccer final pays on the true final score — extra time counts
+      tSum = Number(texas.score || 0); oSum = Number(opp.score || 0);
+    } else if (soccerMode() && q === 1 && !tLines.length && /half\s*-?\s*time|^ht$/i.test(detail)) {
+      tSum = Number(texas.score || 0); oSum = Number(opp.score || 0);
+    } else {
+      // Cumulative through this period's linescore.
+      // CFB Q4 pays end-of-regulation (OT excluded); MLB pays innings 1–4.
+      tSum += tLines[q - 1] || 0; oSum += oLines[q - 1] || 0;
+    }
+    const col = g.texasDigits.indexOf(digitsOf(tSum)) + 1;
+    const row = g.oppDigits.indexOf(digitsOf(oSum)) + 1;
+    const key = row + "_" + col;
+    const sq = squares.get(key);
+    out["q" + q] = {
+      key,
+      squareName: sq ? sq.squareName : "— empty —",
+      fullName: sq ? sq.fullName : "",
+      email: sq ? sq.email : "",
+      empty: !sq,
+      texasScore: tSum, oppScore: oSum
+    };
+  }
+  return out;
+}
+/* Auto-record: while a power admin has the page open on game day, newly
+   completed periods get written automatically — no button pushing. Everyone
+   else sees them appear in real time via Firestore sync. */
+async function autoRecordWinners(g, comp) {
+  if (!isPowerAdmin()) return;
+  const computed = computePeriodWinners(g, comp);
+  const existing = g.winners || {};
+  const newKeys = Object.keys(computed).filter(k => !existing[k]);
+  if (!newKeys.length) return;
+  const winners = { ...existing };
+  newKeys.forEach(k => winners[k] = computed[k]);
+  try {
+    await updateDoc(doc(db, "games", g.id), { winners });
+    const summary = newKeys.map(k => `${periodLabel(Number(k.slice(1)))}: ${winners[k].squareName}`).join(" · ");
+    audit("winner.auto", `${g.opponent || g.id} — ${summary}`);
+    toast("Winner recorded — " + summary);
+  } catch (_) { /* another admin's device may have written it first — fine */ }
 }
 async function pullLive() {
   const g = currentGame();
@@ -629,7 +879,7 @@ async function pullLive() {
       oppLines: (opp.linescores || []).map(l => Number(l.displayValue ?? l.value ?? 0)),
       period: status?.period || 0,
       clock: status?.type?.shortDetail || status?.displayClock || "",
-      texAbbrev: soccerMode()
+      texAbbrev: (soccerMode() || mlbMode())
         ? (texas.team?.abbreviation || "HOME")
         : "TEXAS",
       oppAbbrev: opp.team?.abbreviation || (g.opponent || "OPP").slice(0, 4).toUpperCase()
@@ -638,6 +888,8 @@ async function pullLive() {
     renderTabs();
     renderBoard();
     if (!liveState.inProgress && !liveState.done) $("scoreStrip").classList.add("hidden");
+    // Hands-free winner recording as each period completes
+    if (liveState.inProgress || liveState.done) autoRecordWinners(g, comp);
   } catch (_) { /* network hiccup, next poll */ }
 }
 function renderScoreStrip(g) {
@@ -647,7 +899,7 @@ function renderScoreStrip(g) {
   $("scoreOpp").textContent = liveState.oppScore;
   document.querySelector("#scoreStrip .scoreTeam .scoreLabel").textContent = liveState.texAbbrev;
   $("scoreOppLabel").textContent = liveState.oppAbbrev;
-  const perLabel = soccerMode() ? "H" + liveState.period : "Q" + liveState.period;
+  const perLabel = soccerMode() ? "H" + liveState.period : (mlbMode() ? "INN " + liveState.period : "Q" + liveState.period);
   $("scoreQtr").textContent = liveState.done ? "FINAL" : perLabel;
   $("scoreClock").textContent = liveState.done ? "" : liveState.clock;
 }
@@ -862,47 +1114,16 @@ $("pullScoresBtn").onclick = async () => {
     const res = await fetch(`${espnBase()}/summary?event=${eventId}`);
     const data = await res.json();
     const comp = data?.header?.competitions?.[0];
-    const { texas, opp } = pickCompetitors(comp);
-    const tLines = (texas.linescores || []).map(l => Number(l.displayValue ?? l.value ?? 0));
-    const oLines = (opp.linescores || []).map(l => Number(l.displayValue ?? l.value ?? 0));
-    const state = comp.status?.type?.state;
-    const detail = comp.status?.type?.detail || comp.status?.type?.shortDetail || "";
-    const period = comp.status?.period || tLines.length;
-    const nPer = numPeriods();
-    // Completed periods: all linescores except the one in progress
-    let completed = Math.min(tLines.length, oLines.length);
-    if (state === "in" && period <= completed) completed = period - 1;
-    if (soccerMode() && state === "in" && /half\s*-?\s*time|^ht$/i.test(detail)) completed = 1;
-    if (state === "post") completed = nPer;
+    const computed = computePeriodWinners(g, comp);
     const winners = { ...(g.winners || {}) };
-    let recorded = [];
-    let tSum = 0, oSum = 0;
-    for (let q = 1; q <= Math.min(completed, nPer); q++) {
-      if (soccerMode() && q === nPer && state === "post") {
-        // Soccer final pays on the true final score — extra time counts
-        tSum = Number(texas.score || 0); oSum = Number(opp.score || 0);
-      } else if (soccerMode() && q === 1 && !tLines.length && /half\s*-?\s*time|^ht$/i.test(detail)) {
-        // No linescores in feed: at halftime the current score IS the half score
-        tSum = Number(texas.score || 0); oSum = Number(opp.score || 0);
-      } else {
-        // Cumulative through this period's linescore.
-        // CFB Q4 pays on end-of-regulation — OT excluded by design.
-        tSum += tLines[q - 1] || 0; oSum += oLines[q - 1] || 0;
-      }
-      const col = g.texasDigits.indexOf(digitsOf(tSum)) + 1;
-      const row = g.oppDigits.indexOf(digitsOf(oSum)) + 1;
-      const key = row + "_" + col;
-      const sq = squares.get(key);
-      winners["q" + q] = {
-        key,
-        squareName: sq ? sq.squareName : "— empty —",
-        fullName: sq ? sq.fullName : "",
-        email: sq ? sq.email : "",
-        empty: !sq,
-        texasScore: tSum, oppScore: oSum
-      };
-      recorded.push(`${periodLabel(q)}: ${winners["q" + q].squareName} (${tSum}–${oSum})`);
-    }
+    const recorded = [];
+    Object.keys(computed).forEach(k => {
+      // Re-pulling refreshes ESPN-derived entries but never overwrites a
+      // manually entered correction
+      if (winners[k]?.manual) return;
+      winners[k] = computed[k];
+      recorded.push(`${periodLabel(Number(k.slice(1)))}: ${computed[k].squareName} (${computed[k].texasScore}–${computed[k].oppScore})`);
+    });
     await updateDoc(doc(db, "games", g.id), { winners, espnEventId: eventId });
     if (recorded.length) audit("winner.espnPull", `${g.opponent || g.id}: ${recorded.join(" · ")}`);
     $("pullResult").textContent = recorded.length
@@ -1071,8 +1292,32 @@ function renderCfgGames(list) {
   }
 }
 $("fetchScheduleBtn").onclick = async () => {
+  const count = Number($("cfgGameCount").value || 6);
+  if ($("cfgSport").value === "mlb") {
+    toast("Fetching Rangers schedule from ESPN…");
+    try {
+      espnHomeGames = await fetchRangersWindow();
+      if (!espnHomeGames.length) {
+        toast("ESPN returned no Rangers games in the last 12 / next 14 days — enter matchups and dates manually.");
+        return;
+      }
+      renderCfgGames(espnHomeGames.slice(-count));
+      toast(`Loaded ${espnHomeGames.length} Rangers games — pre-filled the latest ${Math.min(count, espnHomeGames.length)}. Use the dropdowns to swap, then Save season.`);
+    } catch (err) { toast("Rangers fetch failed: " + err.message); }
+    return;
+  }
   if ($("cfgSport").value === "soccer") {
-    toast("Soccer test mode: type the matchups and dates manually (e.g. 'Spain vs Argentina', 2026-07-19).");
+    toast("Fetching World Cup matches from ESPN…");
+    try {
+      espnHomeGames = await fetchWorldCupMatches();
+      if (!espnHomeGames.length) {
+        toast("ESPN returned no World Cup matches in the last 12 / next 14 days — enter matchups and dates manually.");
+        return;
+      }
+      // Pre-fill the most recent + upcoming N; dropdowns let you swap any slot
+      renderCfgGames(espnHomeGames.slice(-count));
+      toast(`Loaded ${espnHomeGames.length} World Cup matches — pre-filled the latest ${Math.min(count, espnHomeGames.length)}. Use the dropdowns to swap, then Save season.`);
+    } catch (err) { toast("World Cup fetch failed: " + err.message); }
     return;
   }
   try {
@@ -1092,7 +1337,6 @@ $("fetchScheduleBtn").onclick = async () => {
     });
     if (!espnHomeGames.length) { toast("No home games found in ESPN schedule yet."); return; }
     // Pre-fill with the LAST N home games; use the dropdowns to swap any of them
-    const count = Number($("cfgGameCount").value || 6);
     renderCfgGames(espnHomeGames.slice(-count));
     toast(`Loaded ${espnHomeGames.length} home games — pre-filled the last ${Math.min(count, espnHomeGames.length)}. Use the dropdowns to swap games, then Save season.`);
   } catch (err) { toast("Schedule fetch failed: " + err.message); }
@@ -1154,6 +1398,7 @@ $("clearBoardBtn").onclick = async () => {
     const batch = writeBatch(db);
     (await getDocs(collection(db, "squares"))).forEach(d => batch.delete(d.ref));
     (await getDocs(collection(db, "payments"))).forEach(d => batch.delete(d.ref));
+    (await getDocs(collection(db, "payouts"))).forEach(d => batch.delete(d.ref));
     games.forEach(g => batch.update(doc(db, "games", g.id), { texasDigits: null, oppDigits: null, numbersLocked: false, winners: {} }));
     batch.update(doc(db, "config", "current"), { boardLocked: false });
     await batch.commit();

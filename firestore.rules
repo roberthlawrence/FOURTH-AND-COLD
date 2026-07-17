@@ -72,6 +72,16 @@ service cloud.firestore {
       allow read, write: if isAnyAdmin();
     }
 
+    // ---- payout confirmations: public read (winners see their status);
+    // power OR payment admins confirm/undo.
+    match /payouts/{payoutId} {
+      allow read: if true;
+      allow create, update: if isAnyAdmin()
+        && request.resource.data.paid is bool
+        && request.resource.data.email is string;
+      allow delete: if isAnyAdmin();
+    }
+
     // ---- audit trail: append-only. Anyone signed in can log their own
     // actions; only admins can read; nobody can edit or delete history.
     match /audit/{entryId} {

@@ -126,6 +126,24 @@ input:focus,textarea:focus{border-color:var(--orange);outline:none}
 #scoreQtr{font-weight:600;color:var(--orange)}
 
 /* ---------- board ---------- */
+/* ---------- per-period score chips above the board ---------- */
+#periodStrip{
+  display:flex;gap:8px;flex-wrap:wrap;justify-content:center;
+  padding:2px 4px 10px;
+}
+.perChip{
+  display:flex;flex-direction:column;align-items:center;min-width:76px;
+  background:#fff;border:1.5px solid var(--line);border-radius:8px;
+  padding:6px 10px;line-height:1.25;
+}
+.perChip.hasWin{border-color:var(--gold);box-shadow:inset 0 3px 0 var(--gold)}
+.perChip.myWin{border-color:var(--orange);background:var(--orange);box-shadow:none}
+.perChip.myWin .pcLabel,.perChip.myWin .pcScore,.perChip.myWin .pcWho{color:#fff}
+.pcLabel{font-family:var(--disp);font-weight:800;font-size:13px;letter-spacing:.08em;color:var(--chalk)}
+.pcScore{font-family:var(--data);font-weight:600;font-size:15px;color:var(--smoke)}
+.pcWho{font-size:11px;font-weight:600;color:var(--orange);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcWho.empty{color:var(--chalk);font-weight:500}
+
 #boardSection{max-width:720px;margin:14px auto 0;padding:0 8px}
 #boardMeta{
   display:flex;justify-content:space-between;align-items:baseline;
@@ -217,6 +235,34 @@ td.sq.liveLead{animation:leadPulse 1.6s ease-in-out infinite;position:relative;z
 .winName{font-weight:600;font-size:15px}
 .winScore{font-family:var(--data);color:var(--chalk);font-size:13px}
 .winPay{font-family:var(--disp);font-weight:800;font-size:19px}
+.payCol{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+.payBadge{
+  font-size:11px;font-weight:800;letter-spacing:.06em;border-radius:999px;
+  padding:3px 10px;white-space:nowrap;
+}
+.payBadge.sent{background:#DBF1E0;color:#1E7A33}
+.payBadge.proc{background:var(--tan);color:var(--orange-deep)}
+.markPaidBtn{
+  background:var(--orange);color:#fff;border:none;border-radius:6px;
+  font-family:var(--body);font-weight:600;font-size:12px;padding:6px 12px;cursor:pointer;
+}
+.markPaidBtn:hover{background:var(--orange-deep)}
+
+/* ---------- winner banner ---------- */
+#winnerBanner{
+  border:2px solid var(--gold);
+  background:linear-gradient(180deg,#FFF9EC 0%,#fff 60%);
+}
+.bannerHead{
+  font-family:var(--disp);font-weight:800;font-size:30px;text-transform:uppercase;
+  margin:0 0 4px;color:var(--smoke);
+}
+.bannerSub{margin:0 0 12px;font-size:15px;color:var(--smoke-2);font-weight:600}
+.bannerWin{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:9px 0;border-bottom:1px dashed var(--line);font-size:14.5px;font-weight:600;
+}
+.bannerNote{font-size:13px;color:var(--smoke-2);margin:12px 0 0}
 .emptyNote{color:var(--chalk);font-size:14px;padding:6px 0}
 
 /* ---------- pot ---------- */
