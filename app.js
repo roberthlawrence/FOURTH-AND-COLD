@@ -253,7 +253,7 @@ function onConfig() {
     $("grpPayments").classList.remove("hidden");
     $("lockBtn").classList.toggle("hidden", !!cfg.boardLocked);
     $("unlockBtn").classList.toggle("hidden", !cfg.boardLocked);
-    if (power) fillSeasonForm();
+    if (power && $("seasonForm").classList.contains("hidden")) fillSeasonForm();
     renderAdminGame();
     renderPayments();
     if (!unsubPay) {
@@ -1255,7 +1255,14 @@ function renderPayments() {
 }
 
 /* ---------------- ADMIN: season setup ---------------- */
-$("seasonToggleBtn").onclick = () => $("seasonForm").classList.toggle("hidden");
+$("seasonToggleBtn").onclick = () => {
+  const f = $("seasonForm");
+  if (f.classList.contains("hidden")) fillSeasonForm(); // fresh values on open, never while editing
+  f.classList.toggle("hidden");
+};
+$("cfgSport").onchange = () => {
+  toast("Sport changed — re-tap 'Fetch schedule from ESPN' so games and their ESPN IDs match this sport, then Save season.");
+};
 
 let espnHomeGames = []; // fetched ESPN home schedule, powers the per-row dropdowns
 
