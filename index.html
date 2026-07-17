@@ -98,26 +98,38 @@
 
   <!-- ============ ADMIN ============ -->
   <section id="adminPanel" class="panel hidden">
-    <h2 class="sectionHead">Admin — <span id="adminWho"></span></h2>
+    <h2 class="sectionHead">Admin — <span id="adminWho"></span> <span id="adminRole" class="roleBadge"></span></h2>
 
-    <div class="adminGroup">
+    <div class="adminGroup" id="grpBoard">
       <h3>Board</h3>
       <div class="btnRow">
         <button id="lockBtn" class="primaryBtn" type="button">Lock board</button>
         <button id="unlockBtn" class="primaryBtn hidden" type="button">Unlock board</button>
+        <button id="clearBoardBtn" class="dangerBtn" type="button">Clear all squares (new season)</button>
       </div>
     </div>
 
-    <div class="adminGroup">
+    <div class="adminGroup" id="grpNumbers">
       <h3>Numbers — <span id="drawGameName"></span></h3>
-      <p class="finePrint">Draws digits for the selected game. Do it live — the shuffle animates for everyone watching.</p>
+      <p class="finePrint">Draw live (animated, crypto-random) or type them in manually. Lock when final so nothing gets fat-fingered.</p>
       <div class="btnRow">
         <button id="drawBtn" class="primaryBtn" type="button">Draw numbers</button>
         <button id="redrawBtn" class="dangerBtn hidden" type="button">Re-draw</button>
+        <button id="lockNumbersBtn" class="ghostBtn hidden" type="button">Lock numbers</button>
+        <button id="unlockNumbersBtn" class="ghostBtn hidden" type="button">Unlock numbers</button>
+      </div>
+      <div id="manualNumbersBox">
+        <label for="manualTopDigits">Top axis digits (10, in order, e.g. 3 7 1 0 9 5 2 8 6 4)</label>
+        <input id="manualTopDigits" type="text" inputmode="numeric" placeholder="3 7 1 0 9 5 2 8 6 4" />
+        <label for="manualSideDigits">Side axis digits (10, in order)</label>
+        <input id="manualSideDigits" type="text" inputmode="numeric" placeholder="6 2 9 4 0 8 1 5 3 7" />
+        <div class="btnRow">
+          <button id="saveManualNumbersBtn" class="ghostBtn" type="button">Save manual numbers</button>
+        </div>
       </div>
     </div>
 
-    <div class="adminGroup">
+    <div class="adminGroup" id="grpScores">
       <h3>Scores &amp; winners</h3>
       <div class="fieldRow">
         <label for="espnIdInput">ESPN game ID</label>
@@ -127,41 +139,67 @@
       </div>
       <div class="btnRow">
         <button id="pullScoresBtn" class="primaryBtn" type="button">Pull scores &amp; record winners</button>
+        <button id="copyAnnounceBtn" class="ghostBtn" type="button">Copy winners announcement</button>
       </div>
       <div id="pullResult" class="finePrint"></div>
+      <h4>Manual winner entry (backup if ESPN fails)</h4>
+      <div class="fieldRow">
+        <label for="manualPeriod">Period</label>
+        <select id="manualPeriod"></select>
+        <input id="manualTexScore" type="number" inputmode="numeric" placeholder="TEX/Home" />
+        <input id="manualOppScore" type="number" inputmode="numeric" placeholder="Opp/Away" />
+        <button id="manualWinnerBtn" class="ghostBtn" type="button">Record winner</button>
+      </div>
+      <p class="finePrint">Enter the score at the end of that period — the winning square is computed from the drawn numbers automatically.</p>
     </div>
 
-    <div class="adminGroup">
+    <div class="adminGroup" id="grpPayments">
       <h3>Payments</h3>
       <div id="payTableWrap"></div>
     </div>
 
-    <div class="adminGroup">
+    <div class="adminGroup" id="grpSeason">
       <h3>Season setup</h3>
       <button id="seasonToggleBtn" class="ghostBtn" type="button">Open season settings</button>
       <div id="seasonForm" class="hidden">
+        <label for="cfgSport">Sport mode</label>
+        <select id="cfgSport">
+          <option value="cfb">Texas Football (real season — 4 quarters)</option>
+          <option value="soccer">Soccer test — FIFA World Cup (2 halves)</option>
+        </select>
         <label for="cfgSeasonName">Season name</label>
         <input id="cfgSeasonName" type="text" />
         <label for="cfgPrice">Price per square ($)</label>
         <input id="cfgPrice" type="number" inputmode="numeric" />
         <label for="cfgPayout">Payout per win ($)</label>
         <input id="cfgPayout" type="number" inputmode="numeric" />
-        <label for="cfgAdmins">Admin emails (comma-separated)</label>
+        <label for="cfgAdmins">Power admin emails (comma-separated — full control)</label>
         <input id="cfgAdmins" type="text" />
+        <label for="cfgPayAdmins">Payment admin emails (comma-separated — payments + square name/release only)</label>
+        <input id="cfgPayAdmins" type="text" />
         <label for="cfgVenmo">Venmo lines (one per line: handle | note)</label>
         <textarea id="cfgVenmo" rows="3"></textarea>
         <label for="cfgBlurb">Welcome blurb</label>
         <textarea id="cfgBlurb" rows="3"></textarea>
-        <h4>Games (6)</h4>
+        <label for="cfgGameCount">Number of games</label>
+        <select id="cfgGameCount"></select>
+        <h4>Games</h4>
         <div id="cfgGames"></div>
         <div class="btnRow">
           <button id="fetchScheduleBtn" class="ghostBtn" type="button">Fetch Texas home schedule</button>
         </div>
         <div class="btnRow">
           <button id="saveSeasonBtn" class="primaryBtn" type="button">Save season</button>
-          <button id="clearBoardBtn" class="dangerBtn" type="button">Clear all squares</button>
         </div>
       </div>
+    </div>
+
+    <div class="adminGroup" id="grpAudit">
+      <h3>Audit log</h3>
+      <div class="btnRow">
+        <button id="auditRefreshBtn" class="ghostBtn" type="button">Load recent activity</button>
+      </div>
+      <div id="auditList"></div>
     </div>
   </section>
 

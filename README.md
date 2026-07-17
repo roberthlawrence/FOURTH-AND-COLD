@@ -59,6 +59,8 @@ Admin → Season setup → update price/payout/games → **Clear all squares** �
 ## Notes & gotchas
 
 - **Score data** comes from ESPN's public (unofficial) scoreboard API, fetched from the viewer's browser. If auto-find can't match a game by date, grab the game ID from the espn.com game URL and paste it in the admin panel.
+- **Two admin tiers:** Power admins (everything, including assigning payment admins) and Payment admins (payments table plus square rename/release only). Both are set in Season setup; enforced server-side by Firestore rules.
+- **Audit trail:** every claim, rename, release, lock, draw, winner, payment change, and season save is logged to an append-only audit collection (Admin → Audit log). Survives season resets.
 - **Player identity is honor-system by email** (same as the old site), but each claim is bound to the device that made it — only that device (or an admin) can edit or release the square, and only while the board is unlocked. Admin actions require Google sign-in against the allowlist, enforced server-side by Firestore rules.
 - **If someone claims from the wrong email / wants to move squares:** an admin can edit or release any square by tapping it.
 - **Free tier limits** (50K reads/day) are far beyond what 100 squares and ~60 people generate, even on game day.

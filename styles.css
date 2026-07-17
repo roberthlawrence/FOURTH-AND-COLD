@@ -86,7 +86,7 @@ button:focus-visible, input:focus-visible, td:focus-visible, textarea:focus-visi
 .fieldStack label, #seasonForm label, #modal label{
   display:block;font-weight:600;font-size:13px;margin:12px 0 4px;color:var(--smoke-2);
 }
-input[type=text],input[type=email],input[type=number],textarea{
+input[type=text],input[type=email],input[type=number],textarea,#seasonForm select{
   width:100%;padding:12px;font-size:16px;font-family:var(--body);
   border:1.5px solid var(--line);border-radius:var(--radius);
   background:#fff;color:var(--smoke);
@@ -140,15 +140,29 @@ input:focus,textarea:focus{border-color:var(--orange);outline:none}
   font-family:var(--data);
 }
 #board th.corner{border:none;background:transparent}
-#board th.axisLabel{
-  border:none;background:transparent;color:var(--chalk);
-  font-size:10px;letter-spacing:.28em;font-weight:600;
+#board th.axisTop{
+  border:none;padding:0 0 6px;
+}
+#board th.axisTop .axisBar{
+  display:block;background:var(--orange);color:#fff;
+  font-family:var(--disp);font-weight:800;font-size:18px;letter-spacing:.22em;
+  padding:7px 4px;border-radius:6px;text-transform:uppercase;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+#board th.vAxis{
+  border:none;background:var(--smoke);color:#fff;
+  font-family:var(--disp);font-weight:800;font-size:16px;letter-spacing:.2em;
+  writing-mode:vertical-rl;transform:rotate(180deg);
+  text-transform:uppercase;padding:6px 5px;border-radius:6px;
+  width:30px;max-height:440px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 th.digit{
   background:var(--smoke);color:var(--gold);
   font-family:var(--disp);font-weight:800;font-size:20px;
   height:34px;position:relative;
 }
+th.digit.colD{background:var(--orange);color:#fff}
+th.digit.rowD{background:var(--smoke);color:var(--gold)}
 th.digit.undrawn{color:var(--smoke-2)}
 th.digit.rolling{color:var(--tan);animation:none}
 td.sq{height:44px;font-size:10.5px;font-weight:600;padding:2px;cursor:pointer;
@@ -160,6 +174,12 @@ td.sq.open:hover{background:var(--tan)}
 td.sq.taken{background:var(--tan);color:var(--smoke)}
 td.sq.mine{background:var(--orange);color:#fff}
 td.sq.winner{box-shadow:var(--win-ring);position:relative;z-index:2}
+td.sq.payHL{
+  background:#1E6FD9 !important;color:#fff !important;
+  box-shadow:0 0 0 2px #7FB2F2;position:relative;z-index:2;
+}
+#payTable tr.hlRow td{background:#E4EEFB}
+#payTable td.emailCell{color:var(--chalk);font-size:12px;max-width:170px;overflow:hidden;text-overflow:ellipsis}
 td.sq.liveLead{animation:leadPulse 1.6s ease-in-out infinite;position:relative;z-index:2}
 @keyframes leadPulse{
   0%,100%{box-shadow:0 0 0 2px var(--gold)}
@@ -231,6 +251,8 @@ td.settledNo{color:#A3271C;font-weight:700}
   display:grid;grid-template-columns:1fr 110px;gap:8px;margin-bottom:8px;align-items:center;
 }
 .cfgGameRow input{padding:9px}
+.cfgPickRow{margin:2px 0 4px}
+.cfgPickRow select{width:100%;padding:8px;font-size:13px;border:1.5px solid var(--line);border-radius:var(--radius);background:#fff;color:var(--smoke-2)}
 
 /* ---------- modal ---------- */
 #modalOverlay{
@@ -258,6 +280,24 @@ td.settledNo{color:#A3271C;font-weight:700}
 #foot{
   text-align:center;color:var(--chalk);font-size:12.5px;padding:26px 0 34px;
 }
+
+/* ---------- roles & audit ---------- */
+.roleBadge{
+  display:inline-block;font-family:var(--body);font-size:11px;font-weight:700;
+  letter-spacing:.08em;text-transform:uppercase;vertical-align:middle;
+  background:var(--gold);color:var(--smoke);border-radius:999px;padding:3px 10px;margin-left:6px;
+}
+.roleBadge.pay{background:var(--tan);color:var(--smoke-2)}
+#manualNumbersBox{margin-top:10px}
+#manualNumbersBox label{display:block;font-weight:600;font-size:13px;margin:10px 0 4px;color:var(--smoke-2)}
+.auditRow{
+  display:grid;grid-template-columns:92px 1fr;gap:10px;
+  padding:8px 2px;border-bottom:1px dashed var(--line);font-size:13px;
+}
+.auditRow .aTime{color:var(--chalk);font-family:var(--data);font-size:12px}
+.auditRow .aAction{font-weight:700}
+.auditRow .aActor{color:var(--orange);font-weight:600}
+.auditRow .aDetails{color:var(--smoke-2)}
 
 @media (prefers-reduced-motion: reduce){
   *{animation:none !important;transition:none !important}
