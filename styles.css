@@ -353,3 +353,10 @@ td.settledNo{color:#A3271C;font-weight:700}
   th.digit{font-size:17px;height:30px}
   #board{min-width:520px}
 }
+
+/* remove-winner control */
+.removeWinBtn{
+  background:#fff;color:#A3271C;border:1px solid #A3271C;border-radius:6px;
+  font-family:var(--body);font-weight:600;font-size:11px;padding:4px 9px;cursor:pointer;
+}
+.removeWinBtn:hover{background:#A3271C;color:#fff}

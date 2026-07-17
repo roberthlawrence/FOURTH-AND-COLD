@@ -44,18 +44,25 @@ function seasonYear() {
   return now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
 }
 async function fetchTexasSchedule() {
-  // Ask for the specific season first; fall back to ESPN's default
-  for (const url of [
-    `${ESPN}/teams/${TEXAS_TEAM_ID}/schedule?season=${seasonYear()}`,
+  // Try most-specific first: explicit season + regular-season type, then
+  // looser variants. Track errors so the UI can tell "blocked" from "empty".
+  const yr = seasonYear();
+  const urls = [
+    `${ESPN}/teams/${TEXAS_TEAM_ID}/schedule?season=${yr}&seasontype=2`,
+    `${ESPN}/teams/${TEXAS_TEAM_ID}/schedule?season=${yr}`,
+    `${ESPN}/teams/${TEXAS_TEAM_ID}/schedule?season=${yr + 1}&seasontype=2`,
     `${ESPN}/teams/${TEXAS_TEAM_ID}/schedule`
-  ]) {
+  ];
+  let lastError = null;
+  for (const url of urls) {
     try {
       const res = await fetch(url);
+      if (!res.ok) { lastError = "HTTP " + res.status; continue; }
       const data = await res.json();
       if ((data.events || []).length) return data;
-    } catch (_) { /* try next */ }
+    } catch (err) { lastError = err.message || String(err); }
   }
-  return { events: [] };
+  return { events: [], error: lastError };
 }
 /* World Cup has no "team schedule" — sweep the tournament scoreboard across a
    date window (recent results + upcoming matches) */
@@ -607,6 +614,22 @@ function renderWinners() {
     // Right column: amount + payout status / admin controls
     const payCol = el("div", "payCol");
     payCol.appendChild(el("span", "winPay", w.empty ? "→ tailgate" : money(cfg?.payoutPerWin)));
+    // Power admins can delete a bad entry (manual or pulled) outright
+    if (isPowerAdmin()) {
+      const rm = el("button", "removeWinBtn", "✕ remove");
+      rm.type = "button";
+      rm.onclick = async () => {
+        if (!confirm(`Remove the ${periodLabel(idx + 1)} winner entry (${w.squareName})? You can re-pull or re-enter it after.`)) return;
+        const winners = { ...(g.winners || {}) };
+        delete winners[q];
+        try {
+          await updateDoc(doc(db, "games", g.id), { winners });
+          audit("winner.remove", `${g.opponent || g.id} ${periodLabel(idx + 1)} — removed "${w.squareName}" (${w.texasScore}–${w.oppScore})${w.manual ? " [was manual]" : ""}`);
+          toast(periodLabel(idx + 1) + " winner removed.");
+        } catch (err) { toast(friendlyErr(err)); }
+      };
+      payCol.appendChild(rm);
+    }
     if (!w.empty) {
       const p = payouts.get(payoutId(g.id, idx + 1));
       if (p?.paid) {
@@ -1112,9 +1135,24 @@ $("pullScoresBtn").onclick = async () => {
   $("pullResult").textContent = "Pulling…";
   try {
     const res = await fetch(`${espnBase()}/summary?event=${eventId}`);
+    if (!res.ok) {
+      $("pullResult").textContent = `ESPN returned HTTP ${res.status} for game ID ${eventId} — that ID may be from a different sport mode. Clear it and tap Auto-find.`;
+      return;
+    }
     const data = await res.json();
     const comp = data?.header?.competitions?.[0];
+    if (!comp || !comp.competitors) {
+      $("pullResult").textContent = `ESPN sent no game data for ID ${eventId} — likely a wrong or stale game ID (e.g. saved under a different sport mode). Clear the ESPN game ID field and tap Auto-find.`;
+      return;
+    }
     const computed = computePeriodWinners(g, comp);
+    if (!Object.keys(computed).length) {
+      const st = comp.status?.type?.state;
+      $("pullResult").textContent = st === "pre"
+        ? "ESPN shows this game hasn't started yet."
+        : "ESPN responded but no completed periods were found — if this game is over, the game ID may be wrong. Clear it and tap Auto-find.";
+      return;
+    }
     const winners = { ...(g.winners || {}) };
     const recorded = [];
     Object.keys(computed).forEach(k => {
@@ -1323,7 +1361,9 @@ $("fetchScheduleBtn").onclick = async () => {
   try {
     const data = await fetchTexasSchedule();
     if (!(data.events || []).length) {
-      toast(`ESPN hasn't published the ${seasonYear()} Texas schedule feed yet — enter opponents and dates manually for now.`);
+      toast(data.error
+        ? "ESPN request failed (" + data.error + ") — the browser may be blocking it. Enter games manually, or try again on Wi-Fi/another browser."
+        : `ESPN returned an empty ${seasonYear()} Texas schedule — enter opponents and dates manually for now.`);
       return;
     }
     espnHomeGames = (data.events || []).filter(e => {
