@@ -1,7 +1,7 @@
 // Paste your Firebase web app config here.
 // Firebase console → Project settings → Your apps → Web app → Config
 export const firebaseConfig = {
- apiKey: "AIzaSyAvvssZ_XL4pvv4784k40W-aapzSNsmijc",
+  apiKey: "AIzaSyAvvssZ_XL4pvv4784k40W-aapzSNsmijc",
   authDomain: "fourth-and-cold.firebaseapp.com",
   projectId: "fourth-and-cold",
   storageBucket: "fourth-and-cold.firebasestorage.app",
