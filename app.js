@@ -792,6 +792,25 @@ function renderMyPanel() {
   } else bal.textContent = "";
 }
 
+/* Tap a handle → open the Venmo app on a prefilled payment screen
+   (recipient, their balance due, and the required note). Falls back to the
+   venmo.com profile page if the app doesn't take the handoff. */
+function openVenmo(handle) {
+  const mine = [...squares.values()].filter(s => s.email === me.email).length;
+  const owed = mine * (cfg?.pricePerSquare || 0);
+  const note = encodeURIComponent(`${me.fullName || ""} — 4th and Cold Squares`.trim());
+  const amountPart = owed > 0 ? `&amount=${owed}` : "";
+  const deepLink = `venmo://paycharge?txn=pay&recipients=${encodeURIComponent(handle)}${amountPart}&note=${note}`;
+  const webFallback = `https://venmo.com/u/${encodeURIComponent(handle)}`;
+  // If the app opens, this page backgrounds and the fallback timer is cancelled
+  const fallback = setTimeout(() => { window.location.href = webFallback; }, 1400);
+  const onHide = () => {
+    if (document.hidden) { clearTimeout(fallback); document.removeEventListener("visibilitychange", onHide); }
+  };
+  document.addEventListener("visibilitychange", onHide);
+  window.location.href = deepLink;
+}
+
 function renderVenmo() {
   const box = $("venmoBox");
   box.innerHTML = "";
@@ -799,13 +818,14 @@ function renderVenmo() {
     const line = el("div");
     const a = el("a", null, "@" + v.handle);
     a.href = "https://venmo.com/u/" + v.handle;
-    a.target = "_blank"; a.rel = "noopener";
+    a.onclick = (e) => { e.preventDefault(); openVenmo(v.handle); };
     line.appendChild(a);
     if (v.note) line.append(" — " + v.note);
     box.appendChild(line);
   });
   if (cfg?.venmo?.length) {
-    box.appendChild(el("div", "finePrint", `Include your name and "4th and Cold Squares" in the payment note.`));
+    box.appendChild(el("div", "finePrint",
+      `Tap a handle to open Venmo with your amount and note pre-filled — or pay manually and include your name and "4th and Cold Squares" in the note.`));
   }
 }
 
