@@ -1958,6 +1958,18 @@ $("archiveBtn").onclick = async () => {
   hideLoading();
 };
 
+/* Live CSV: current state right now — unlike archive CSVs, which are
+   point-in-time snapshots frozen when the archive was created */
+$("csvNowBtn").onclick = async () => {
+  showLoading();
+  try {
+    const archive = await buildSeasonArchive();
+    downloadCsv(`4th-and-cold-${archiveSlug(archive)}-current-${tsFileStamp()}.csv`, buildCsv(archive));
+    toast("Current CSV downloaded.");
+  } catch (err) { toast("CSV failed: " + (err.message || err)); }
+  hideLoading();
+};
+
 /* Browse cloud archives: download JSON/CSV or restore any past season */
 $("cloudArchivesBtn").onclick = async () => {
   const list = $("cloudArchivesList");
