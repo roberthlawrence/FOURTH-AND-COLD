@@ -825,7 +825,9 @@ function renderVenmo() {
 function winnerKeysForGame(g) {
   const set = new Set();
   if (!g?.winners) return set;
-  Object.values(g.winners).forEach(w => { if (w?.key) set.add(w.key); });
+  // Only claimed wins get the gold ring — an empty-square (tailgate) win
+  // shouldn't crown whoever claims that cell later
+  Object.values(g.winners).forEach(w => { if (w?.key && !w.empty) set.add(w.key); });
   return set;
 }
 const payoutId = (gameId, q) => `${gameId}_q${q}`;
@@ -1574,9 +1576,11 @@ function renderPayoutsList() {
   const badge = $("unpaidBadge");
   list.innerHTML = "";
   const all = [];
+  let tailgateWins = 0;
   games.forEach(g => {
     Object.entries(g.winners || {}).forEach(([qKey, w]) => {
-      if (!w || w.empty) return;
+      if (!w) return;
+      if (w.empty) { tailgateWins++; return; }
       const q = Number(qKey.slice(1));
       all.push({ g, q, w, payout: payouts.get(payoutId(g.id, q)) });
     });
@@ -1585,7 +1589,9 @@ function renderPayoutsList() {
   badge.classList.remove("hidden");
   if (!all.length) {
     badge.classList.add("hidden");
-    list.appendChild(el("div", "emptyNote", "No winners recorded yet."));
+    list.appendChild(el("div", "emptyNote", tailgateWins
+      ? `${tailgateWins} winner${tailgateWins === 1 ? "" : "s"} recorded — all on unclaimed squares (→ tailgate fund). Nothing to pay out.`
+      : "No winners recorded yet."));
     return;
   }
   badge.textContent = unpaid.length ? `${unpaid.length} UNPAID` : "ALL PAID ✓";
