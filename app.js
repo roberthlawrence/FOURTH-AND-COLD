@@ -190,14 +190,20 @@ async function completeEmailLinkIfPresent() {
   email = email.toLowerCase();
   try {
     await signInWithEmailLink(auth, email, location.href);
-    const first = (pending.first || "").trim(), last = (pending.last || "").trim();
+    let first = (pending.first || "").trim(), last = (pending.last || "").trim();
+    if (!first && !last) {
+      // Returning player via a fresh link — pull their canonical name
+      const prof = await fetchProfile(email);
+      first = prof?.firstName || ""; last = prof?.lastName || "";
+    }
     me = { fullName: (first + " " + last).trim() || email.split("@")[0], email };
     saveIdentity();
     localStorage.removeItem("fc_pending");
-    // Canonical profile: one name per email, used everywhere names are shown
-    setDoc(doc(db, "profiles", payDocId(email)), {
-      firstName: first, lastName: last, email, updatedAt: serverTimestamp()
-    }, { merge: true }).catch(() => {});
+    // Canonical profile: one name per email; never overwrite names with blanks
+    const profUpdate = { email, updatedAt: serverTimestamp() };
+    if (first) profUpdate.firstName = first;
+    if (last) profUpdate.lastName = last;
+    setDoc(doc(db, "profiles", payDocId(email)), profUpdate, { merge: true }).catch(() => {});
     audit("player.verified", email);
     history.replaceState(null, "", location.pathname);
     toast("Email verified — welcome to the board! 🤘");
@@ -298,7 +304,9 @@ function onConfig() {
   $("welcomeBlurb").textContent = cfg.blurb || "";
   const power = isPowerAdmin(), pay = isPaymentAdmin();
   const admin = power || pay;
-  $("adminPanel").classList.toggle("hidden", !admin);
+  // Admin tools stay tucked away until requested — the toggle lives at the bottom
+  $("adminToolsBar").classList.toggle("hidden", !admin);
+  $("adminPanel").classList.toggle("hidden", !(admin && adminToolsOpen));
   if (adminEmail) $("adminLoginBtn").textContent = "Sign out";
   if (admin) {
     $("adminWho").textContent = adminEmail;
@@ -338,6 +346,45 @@ function onConfig() {
       send the sign-in link, skip the name step.
    3. Brand-new email: ask first/last name once, then send the link. */
 let pendingEmail = "";
+let adminToolsOpen = false;
+$("adminToolsBtn").onclick = () => {
+  adminToolsOpen = !adminToolsOpen;
+  $("adminToolsBtn").textContent = adminToolsOpen ? "Hide admin tools" : "Show admin tools";
+  $("adminPanel").classList.toggle("hidden", !adminToolsOpen);
+  if (adminToolsOpen) $("adminPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+
+/* Keep the display name synced to the canonical profile (fixes stale or
+   email-prefix names saved before the profile existed) */
+async function refreshIdentityFromProfile() {
+  if (!me.email) return;
+  const prof = await fetchProfile(me.email);
+  if (!prof) return;
+  const name = ((prof.firstName || "") + " " + (prof.lastName || "")).trim();
+  if (name && name !== me.fullName) {
+    me.fullName = name;
+    saveIdentity(); route();
+  }
+}
+/* Tap your name in the top bar to fix a typo — updates the profile everywhere */
+$("userChipName").onclick = async () => {
+  if (!me.email) return;
+  if (!isVerifiedPlayer() && !isAdmin()) { toast("Re-verify your email first to update your name."); return; }
+  const prof = await fetchProfile(me.email) || {};
+  const first = (prompt("First name:", prof.firstName || me.fullName.split(" ")[0] || "") || "").trim();
+  if (!first) return;
+  const last = (prompt("Last name:", prof.lastName || me.fullName.split(" ").slice(1).join(" ") || "") || "").trim();
+  if (!last) return;
+  try {
+    await setDoc(doc(db, "profiles", payDocId(me.email)), {
+      firstName: first, lastName: last, email: me.email, updatedAt: serverTimestamp()
+    }, { merge: true });
+    me.fullName = first + " " + last;
+    saveIdentity(); route();
+    audit("profile.update", `${me.email} → ${me.fullName}`);
+    toast("Name updated to " + me.fullName + ".");
+  } catch (err) { toast(friendlyErr(err)); }
+};
 async function fetchProfile(email) {
   try {
     const snap = await getDoc(doc(db, "profiles", payDocId(email)));
@@ -662,6 +709,7 @@ function onSquareTap(row, col, sq) {
   setTimeout(() => $("sqNameInput").focus(), 50);
 }
 function suggestName() {
+  if (!me.fullName || me.fullName.includes("@")) return "";
   const parts = me.fullName.split(/\s+/);
   return parts.length > 1 ? parts[0] + " " + parts[parts.length - 1][0] : me.fullName;
 }
@@ -1818,4 +1866,5 @@ $("auditDownloadBtn").onclick = async () => {
 /* ---------------- kick off ---------------- */
 startListeners();
 completeEmailLinkIfPresent();
+setTimeout(() => refreshIdentityFromProfile(), 1500);
 setTimeout(() => maybeStartLivePoll(), 2500);
