@@ -1,5 +1,5 @@
-// Paste your Firebase web app config here.
-// Firebase console → Project settings → Your apps → Web app → Config
+// This is the public web-app config for the fourth-and-cold Firebase project.
+// It is safe to commit — it ships to every visitor's browser by design.
 export const firebaseConfig = {
   apiKey: "AIzaSyAvvssZ_XL4pvv4784k40W-aapzSNsmijc",
   authDomain: "fourth-and-cold.firebaseapp.com",

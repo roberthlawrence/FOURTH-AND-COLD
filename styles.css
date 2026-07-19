@@ -384,7 +384,10 @@ td.settledNo{color:#A3271C;font-weight:700}
 
 /* ---------- logo & watermark ---------- */
 #topLogo{height:42px;width:auto;display:block;flex:0 0 auto}
-#welcomeLogo{height:130px;width:auto;display:block;margin:0 0 10px}
+#welcomeHead{display:flex;align-items:center;gap:16px;margin-bottom:4px}
+#welcomeLogo{height:100px;width:auto;display:block;flex:0 0 auto}
+#welcomeHead .displayHead{margin:0}
+@media (max-width:420px){#welcomeLogo{height:78px}}
 #bgWatermark{
   position:fixed;inset:0;pointer-events:none;z-index:0;
   background:url('logo-dark.png') no-repeat center 68%;
