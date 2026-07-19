@@ -137,6 +137,15 @@
         <button id="unlockBtn" class="primaryBtn hidden" type="button">Unlock board</button>
         <button id="clearBoardBtn" class="dangerBtn" type="button">Clear all squares (new season)</button>
       </div>
+      <h4>Season archive</h4>
+      <p class="finePrint">Everything — squares, numbers, winners, payments in and out, profiles, and the audit log — in one file. Clearing a season downloads one automatically; restore puts a season back exactly as archived.</p>
+      <div class="btnRow">
+        <button id="archiveBtn" class="ghostBtn" type="button">Download season archive</button>
+        <button id="restoreBtn" class="ghostBtn" type="button">Restore from file</button>
+        <input id="restoreFile" type="file" accept=".json,application/json" class="hidden" />
+        <button id="cloudArchivesBtn" class="ghostBtn" type="button">View saved archives</button>
+      </div>
+      <div id="cloudArchivesList"></div>
     </div>
 
     <div class="adminGroup" id="grpNumbers">

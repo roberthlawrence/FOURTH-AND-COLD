@@ -1800,18 +1800,274 @@ $("saveSeasonBtn").onclick = async () => {
   } catch (err) { toast(friendlyErr(err)); }
 };
 
+/* ---------------- ADMIN: season archive & restore ----------------
+   Archive = one JSON with everything: config, squares, games (numbers,
+   winners, finals), payments in, payouts out, profiles, and the audit log.
+   Clearing a season always downloads one first. Restore writes it all back. */
+function tsFileStamp() {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+}
+async function buildSeasonArchive() {
+  const dump = (m) => { const o = {}; m.forEach((v, k) => o[k] = v); return o; };
+  const gamesObj = {};
+  games.forEach(g => { const { id, ...rest } = g; gamesObj[id] = rest; });
+  // Audit is fetched fresh (it's not held in memory)
+  const auditRows = [];
+  try {
+    let cursor = null;
+    while (auditRows.length < 10000) {
+      const qy = cursor
+        ? query(collection(db, "audit"), orderBy("ts", "desc"), startAfter(cursor), limit(500))
+        : query(collection(db, "audit"), orderBy("ts", "desc"), limit(500));
+      const snap = await getDocs(qy);
+      if (snap.empty) break;
+      snap.forEach(d => auditRows.push(d.data()));
+      cursor = snap.docs[snap.docs.length - 1];
+      if (snap.size < 500) break;
+    }
+  } catch (_) { /* audit optional in archive */ }
+  return {
+    archiveVersion: 1,
+    app: "4th-and-cold-squares",
+    seasonName: cfg?.seasonName || "Season",
+    exportedAt: new Date().toISOString(),
+    exportedBy: adminEmail || "",
+    config: cfg || {},
+    squares: dump(squares),
+    games: gamesObj,
+    payments: dump(payments),
+    payouts: dump(payouts),
+    profiles: dump(profiles),
+    audit: auditRows
+  };
+}
+function downloadArchive(archive) {
+  const blob = new Blob([JSON.stringify(archive, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  const slug = (archive.seasonName || "season").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  a.download = `4th-and-cold-archive-${slug}-${tsFileStamp()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+/* Human-readable CSV: boards per game, winners, payments in & out */
+function csvEscape(v) {
+  v = String(v ?? "");
+  return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+function buildCsv(archive) {
+  const L = [];
+  const row = (...cells) => L.push(cells.map(csvEscape).join(","));
+  row("4TH AND COLD SQUARES — SEASON ARCHIVE");
+  row("Season", archive.seasonName);
+  row("Exported", archive.exportedAt, "by", archive.exportedBy || "");
+  row("Price per square", archive.config?.pricePerSquare ?? "", "Payout per win", archive.config?.payoutPerWin ?? "");
+  L.push("");
+  // Claims list
+  row("SQUARES CLAIMED");
+  row("Row", "Col", "Square name", "Full name", "Email");
+  Object.values(archive.squares || {})
+    .sort((a, b) => (a.row - b.row) || (a.col - b.col))
+    .forEach(sq => row(sq.row, sq.col, sq.squareName, sq.fullName, sq.email));
+  L.push("");
+  // One board grid per game (numbers differ per game)
+  const gameIds = Object.keys(archive.games || {}).sort((a, b) =>
+    ((archive.games[a].order || 0) - (archive.games[b].order || 0)));
+  gameIds.forEach(gid => {
+    const g = archive.games[gid];
+    row("BOARD — " + (g.opponent || gid), g.date || "");
+    const top = g.texasDigits, side = g.oppDigits;
+    row("", ...(top ? top : Array(10).fill("?")));
+    for (let r = 1; r <= 10; r++) {
+      const cells = [];
+      for (let c = 1; c <= 10; c++) {
+        const sq = archive.squares?.[r + "_" + c];
+        cells.push(sq ? sq.squareName : "");
+      }
+      row(side ? side[r - 1] : "?", ...cells);
+    }
+    L.push("");
+  });
+  // Winners across the season
+  row("WINNERS");
+  row("Game", "Period", "Square name", "Full name", "Email", "Score", "Payout confirmed", "Confirmed by");
+  gameIds.forEach(gid => {
+    const g = archive.games[gid];
+    Object.entries(g.winners || {})
+      .sort((a, b) => Number(a[0].slice(1)) - Number(b[0].slice(1)))
+      .forEach(([qk, w]) => {
+        const q = Number(qk.slice(1));
+        const p = archive.payouts?.[gid + "_q" + q];
+        row(g.opponent || gid, qk.toUpperCase(), w.squareName, w.fullName || "", w.email || "",
+            `${w.texasScore}-${w.oppScore}`, p?.paid ? "YES" : (w.empty ? "n/a (tailgate)" : "no"), p?.paidBy || "");
+      });
+    if (g.finalScore) row(g.opponent || gid, "FINAL SCORE", "", "", "", `${g.finalScore.t}-${g.finalScore.o}`, "", "");
+  });
+  L.push("");
+  // Payments in
+  row("PAYMENTS RECEIVED");
+  row("Full name", "Email", "Amount received", "Paid to");
+  Object.values(archive.payments || {}).forEach(p =>
+    row(p.fullName || "", p.email || "", p.amountReceived ?? 0, p.paidTo || ""));
+  return L.join("\n");
+}
+function downloadCsv(name, csv) {
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function archiveSlug(archive) {
+  return (archive.seasonName || "season").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+/* Cloud copy: everything except the audit log (audit lives in its own
+   collection forever and would blow Firestore's 1MB doc cap). CSV rides along. */
+async function storeArchiveToCloud(archive) {
+  const { audit: _omit, ...cloudCopy } = archive;
+  cloudCopy.auditIncluded = false;
+  cloudCopy.csv = buildCsv(archive);
+  cloudCopy.ts = serverTimestamp();
+  const id = archiveSlug(archive) + "-" + tsFileStamp() + "-" + Date.now().toString(36);
+  await setDoc(doc(db, "archives", id), cloudCopy);
+  return id;
+}
+$("archiveBtn").onclick = async () => {
+  showLoading();
+  try {
+    const archive = await buildSeasonArchive();
+    downloadArchive(archive);
+    await storeArchiveToCloud(archive);
+    audit("season.archive", `${archive.seasonName} — ${Object.keys(archive.squares).length} squares, ${Object.keys(archive.payments).length} payment records — downloaded + saved to cloud`);
+    toast("Archive downloaded and saved to the cloud.");
+  } catch (err) { toast("Archive failed: " + (err.message || err)); }
+  hideLoading();
+};
+
+/* Browse cloud archives: download JSON/CSV or restore any past season */
+$("cloudArchivesBtn").onclick = async () => {
+  const list = $("cloudArchivesList");
+  list.innerHTML = "";
+  list.appendChild(el("div", "emptyNote", "Loading…"));
+  try {
+    const snap = await getDocs(query(collection(db, "archives"), orderBy("ts", "desc"), limit(50)));
+    list.innerHTML = "";
+    if (snap.empty) { list.appendChild(el("div", "emptyNote", "No cloud archives yet — they're created automatically whenever a season is archived or cleared.")); return; }
+    snap.forEach(d => {
+      const a = d.data();
+      const rowEl = el("div", "poRow");
+      const left = el("div");
+      left.appendChild(el("div", "poGame", a.seasonName || d.id));
+      left.appendChild(el("div", "poMeta",
+        `${(a.exportedAt || "").slice(0, 10)} · ${Object.keys(a.squares || {}).length} squares · ${Object.keys(a.payments || {}).length} payments · by ${a.exportedBy || "?"}`));
+      rowEl.appendChild(left);
+      const right = el("div", "btnRow");
+      const jBtn = el("button", "ghostBtn miniBtn", "JSON");
+      jBtn.type = "button";
+      jBtn.onclick = () => downloadArchive({ ...a, audit: a.audit || [] });
+      const cBtn = el("button", "ghostBtn miniBtn", "CSV");
+      cBtn.type = "button";
+      cBtn.onclick = () => downloadCsv(`4th-and-cold-${archiveSlug(a)}-${(a.exportedAt || "").slice(0, 10)}.csv`, a.csv || buildCsv(a));
+      const rBtn = el("button", "dangerBtn miniBtn", "Restore");
+      rBtn.type = "button";
+      rBtn.onclick = () => confirmAndRestore(a);
+      right.append(jBtn, cBtn, rBtn);
+      rowEl.appendChild(right);
+      list.appendChild(rowEl);
+    });
+  } catch (err) {
+    list.innerHTML = "";
+    list.appendChild(el("div", "emptyNote", "Couldn't load archives: " + (err.message || err)));
+  }
+};
+
+/* Restore: overwrite the live season with an archive's contents.
+   Firestore batches cap at 500 ops, so writes are chunked. */
+function chunkedBatches() {
+  const batches = [writeBatch(db)];
+  let count = 0;
+  const op = (fn) => {
+    if (count >= 400) { batches.push(writeBatch(db)); count = 0; }
+    fn(batches[batches.length - 1]);
+    count++;
+  };
+  const commit = async () => { for (const b of batches) await b.commit(); };
+  return { op, commit };
+}
+$("restoreBtn").onclick = () => $("restoreFile").click();
+$("restoreFile").onchange = async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = ""; // allow re-picking the same file later
+  if (!file) return;
+  let archive;
+  try { archive = JSON.parse(await file.text()); }
+  catch (_) { toast("That file isn't readable JSON."); return; }
+  confirmAndRestore(archive);
+};
+async function confirmAndRestore(archive) {
+  if (archive?.app !== "4th-and-cold-squares" || !archive.archiveVersion) {
+    toast("That doesn't look like a 4th & Cold season archive."); return;
+  }
+  const when = (archive.exportedAt || "").slice(0, 10);
+  if (!confirm(`Restore season "${archive.seasonName}" (exported ${when})? This OVERWRITES the current board, payments, payouts, and numbers.`)) return;
+  if (!confirm("Really sure? Current data will be replaced by the archive.")) return;
+  showLoading();
+  try {
+    const { op, commit } = chunkedBatches();
+    // Wipe current docs that aren't in the archive, then write archive docs
+    (await getDocs(collection(db, "squares"))).forEach(d => { if (!archive.squares?.[d.id]) op(b => b.delete(d.ref)); });
+    (await getDocs(collection(db, "payments"))).forEach(d => { if (!archive.payments?.[d.id]) op(b => b.delete(d.ref)); });
+    (await getDocs(collection(db, "payouts"))).forEach(d => { if (!archive.payouts?.[d.id]) op(b => b.delete(d.ref)); });
+    (await getDocs(collection(db, "games"))).forEach(d => { if (!archive.games?.[d.id]) op(b => b.delete(d.ref)); });
+    Object.entries(archive.squares || {}).forEach(([id, data]) => op(b => b.set(doc(db, "squares", id), data)));
+    Object.entries(archive.payments || {}).forEach(([id, data]) => op(b => b.set(doc(db, "payments", id), data)));
+    Object.entries(archive.payouts || {}).forEach(([id, data]) => op(b => b.set(doc(db, "payouts", id), data)));
+    Object.entries(archive.games || {}).forEach(([id, data]) => op(b => b.set(doc(db, "games", id), data)));
+    Object.entries(archive.profiles || {}).forEach(([id, data]) => op(b => b.set(doc(db, "profiles", id), data, { merge: true })));
+    // Config last — and never restore yourself out of the admin list
+    const cfgData = { ...(archive.config || {}) };
+    const admins = (cfgData.adminEmails || []).map(x => String(x).toLowerCase());
+    if (adminEmail && !admins.includes(adminEmail)) admins.push(adminEmail);
+    cfgData.adminEmails = admins;
+    op(b => b.set(doc(db, "config", "current"), cfgData));
+    await commit();
+    audit("season.restore", `Restored "${archive.seasonName}" (exported ${archive.exportedAt || "?"}) — ${Object.keys(archive.squares || {}).length} squares, ${Object.keys(archive.payments || {}).length} payments, ${Object.keys(archive.payouts || {}).length} payouts`);
+    toast(`Season "${archive.seasonName}" restored.`);
+  } catch (err) { toast("Restore failed: " + (err.message || err)); }
+  hideLoading();
+}
+
 $("clearBoardBtn").onclick = async () => {
   if (!confirm("Are you sure? This will delete ALL data — every square, payment, drawn number, and winner.")) return;
   if (!confirm("Are you REALLY sure? Is this really a new season?")) return;
+  // Archive first, always — the wipe never runs without a saved copy
+  showLoading();
+  let archived = false;
+  try {
+    const archive = await buildSeasonArchive();
+    downloadArchive(archive);
+    await storeArchiveToCloud(archive).catch(() => {}); // cloud copy is best-effort
+    archived = true;
+  } catch (_) { /* fall through to the confirm below */ }
+  hideLoading();
+  if (!archived) {
+    if (!confirm("Couldn't build the archive download. Wipe WITHOUT a backup?")) return;
+  } else {
+    if (!confirm("Season archive downloaded to your device — check your downloads, then OK to wipe.")) return;
+  }
   try {
     const batch = writeBatch(db);
     (await getDocs(collection(db, "squares"))).forEach(d => batch.delete(d.ref));
     (await getDocs(collection(db, "payments"))).forEach(d => batch.delete(d.ref));
     (await getDocs(collection(db, "payouts"))).forEach(d => batch.delete(d.ref));
-    games.forEach(g => batch.update(doc(db, "games", g.id), { texasDigits: null, oppDigits: null, numbersLocked: false, winners: {} }));
+    games.forEach(g => batch.update(doc(db, "games", g.id), { texasDigits: null, oppDigits: null, numbersLocked: false, winners: {}, finalScore: null }));
     batch.update(doc(db, "config", "current"), { boardLocked: false });
     await batch.commit();
-    audit("season.clear", "All squares, payments, numbers, and winners wiped for a new season");
+    audit("season.clear", "All squares, payments, payouts, numbers, and winners wiped for a new season (archive downloaded first)");
     toast("Fresh board. New season, who dis.");
   } catch (err) { toast(friendlyErr(err)); }
 };

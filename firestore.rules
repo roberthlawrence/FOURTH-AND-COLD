@@ -102,6 +102,11 @@ service cloud.firestore {
       allow delete: if isAnyAdmin();
     }
 
+    // ---- season archives: full past-season snapshots + CSV. Power only.
+    match /archives/{archiveId} {
+      allow read, write: if isPowerAdmin();
+    }
+
     // ---- audit trail: append-only. Anyone signed in can log their own
     // actions; only admins can read; nobody can edit or delete history.
     match /audit/{entryId} {
