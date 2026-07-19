@@ -1468,9 +1468,26 @@ function paymentRollup() {
   });
   return [...byEmail.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
+let payRenderDeferred = false;
+$("payTableWrap").addEventListener("focusout", () => {
+  // wait a tick so focus can settle on the next field (tabbing between inputs)
+  setTimeout(() => {
+    if (payRenderDeferred && !$("payTableWrap").contains(document.activeElement)) {
+      payRenderDeferred = false;
+      renderPayments();
+    }
+  }, 120);
+});
 function renderPayments() {
   if (!isAdmin()) return;
   const wrap = $("payTableWrap");
+  // Don't yank the cursor: if an amount field is being edited, wait until
+  // focus leaves the table, then refresh once.
+  if (wrap.contains(document.activeElement) &&
+      (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "SELECT")) {
+    payRenderDeferred = true;
+    return;
+  }
   const rows = paymentRollup();
   const price = cfg?.pricePerSquare || 0;
   const table = el("table"); table.id = "payTable";
@@ -1485,7 +1502,8 @@ function renderPayments() {
     if (highlightEmail === r.email) tr.classList.add("hlRow");
     const nameTd = el("td", null, r.fullName);
     tr.appendChild(nameTd);
-    tr.appendChild(el("td", "emailCell", r.email));
+    const emailTd = el("td", "emailCell", r.email);
+    tr.appendChild(emailTd);
     tr.appendChild(el("td", null, String(r.count)));
     tr.appendChild(el("td", null, money(owed)));
     const recTd = el("td");
@@ -1505,19 +1523,25 @@ function renderPayments() {
     const received = Number(pay.amountReceived || 0);
     const settled = received >= owed && owed > 0;
     tr.appendChild(el("td", settled ? "settledYes" : "settledNo", settled ? "Settled" : money(owed - received) + " due"));
-    // Tap the row (not the inputs) to light up this person's squares on the board
-    tr.onclick = (e) => {
-      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "OPTION") return;
+    // Tap the NAME or EMAIL cell to light up this person's squares —
+    // deliberately not the whole row, so editing the amount never triggers it
+    const toggleHL = () => {
       if (highlightEmail === r.email) {
         highlightEmail = null;
         toast("Highlight cleared.");
       } else {
         highlightEmail = r.email;
-        toast(`Highlighting ${r.fullName}'s ${r.count} square${r.count === 1 ? "" : "s"} in blue — tap the row again to clear.`);
+        toast(`Highlighting ${r.fullName}'s ${r.count} square${r.count === 1 ? "" : "s"} in blue — tap the name again to clear.`);
         $("boardSection").scrollIntoView({ behavior: "smooth", block: "start" });
       }
       renderBoard(); renderPayments();
     };
+    nameTd.classList.add("hlToggle");
+    nameTd.title = "Tap to highlight their squares on the board";
+    nameTd.onclick = toggleHL;
+    emailTd.classList.add("hlToggle");
+    emailTd.title = "Tap to highlight their squares on the board";
+    emailTd.onclick = toggleHL;
     const save = async () => {
       try {
         await setDoc(doc(db, "payments", payDocId(r.email)), {
