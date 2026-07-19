@@ -11,11 +11,15 @@
 </head>
 <body>
 
+<div id="bgWatermark" aria-hidden="true"></div>
+
 <header id="topBar">
+  <img id="topLogo" src="logo-white.png" alt="4th and Cold" />
   <div id="brand">
     <span id="brandKick">4TH &amp; COLD</span>
     <span id="brandSeason">SQUARES</span>
   </div>
+  <div id="topGameChip"></div>
   <div id="userChip" class="hidden">
     <span id="userChipName"></span>
     <button id="switchUserBtn" class="linkBtn" type="button">switch</button>
@@ -25,15 +29,30 @@
 
 <!-- ============ WELCOME / IDENTITY ============ -->
 <section id="welcomePanel" class="panel hidden">
+  <img id="welcomeLogo" src="logo-dark.png" alt="" />
   <h1 class="displayHead">CLAIM YOUR<br/>SQUARES</h1>
   <p id="welcomeBlurb" class="blurb"></p>
-  <div class="fieldStack">
-    <label for="wFullName">Full name</label>
-    <input id="wFullName" type="text" autocomplete="name" placeholder="Bevo Longhorn" />
+  <div class="fieldStack" id="emailStep">
     <label for="wEmail">Email</label>
     <input id="wEmail" type="email" autocomplete="email" placeholder="bevo@utexas.edu" />
-    <button id="enterBoardBtn" class="primaryBtn" type="button">Enter the board</button>
-    <p class="finePrint">Your email links your squares to you all season. Use the same one everywhere.</p>
+    <button id="continueBtn" class="primaryBtn" type="button">Continue</button>
+    <p class="finePrint">Start with your email — if you've been here before, that's all you need. All your squares and winnings are tied to it.</p>
+  </div>
+  <div class="fieldStack hidden" id="nameStep">
+    <p class="blurb">Looks like you're new here — tell us who you are.</p>
+    <label for="wFirstName">First name</label>
+    <input id="wFirstName" type="text" autocomplete="given-name" placeholder="Bevo" />
+    <label for="wLastName">Last name</label>
+    <input id="wLastName" type="text" autocomplete="family-name" placeholder="Longhorn" />
+    <p class="finePrint">Your real name — not your square name. You'll pick square names when you claim.</p>
+    <button id="sendLinkBtn" class="primaryBtn" type="button">Send verification link</button>
+    <p class="finePrint">We'll email you a sign-in link to confirm your address.</p>
+  </div>
+  <div class="fieldStack hidden" id="verifyStep">
+    <h2 class="sectionHead">Check your email</h2>
+    <p class="blurb">A sign-in link was sent to <b id="verifySentTo"></b>. Open it <b>on this device</b> to finish.</p>
+    <button id="resendLinkBtn" class="ghostBtn" type="button">Resend link</button>
+    <button id="changeEmailBtn" class="linkBtn" type="button">Wrong email? Change it</button>
   </div>
 </section>
 
@@ -76,6 +95,7 @@
       <span><i class="lg lgOpen"></i> Open</span>
       <span><i class="lg lgTaken"></i> Taken</span>
       <span><i class="lg lgMine"></i> Yours</span>
+      <span><i class="lg lgLive"></i> Leading now</span>
       <span><i class="lg lgWin"></i> Winner</span>
     </div>
   </section>
@@ -160,6 +180,8 @@
     <div class="adminGroup" id="grpPayments">
       <h3>Payments</h3>
       <div id="payTableWrap"></div>
+      <h4>Winner payouts — all games <span id="unpaidBadge" class="payBadge proc hidden"></span></h4>
+      <div id="payoutsList"></div>
     </div>
 
     <div class="adminGroup" id="grpSeason">

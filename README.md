@@ -20,7 +20,7 @@ A season-long football squares board for the Texas Longhorns tailgate. Static si
 1. Go to [console.firebase.google.com](https://console.firebase.google.com) → **Add project** (e.g. `fourth-and-cold`). Google Analytics: off.
 2. **Build → Firestore Database → Create database** → Start in **production mode** → location `nam5 (us-central)`.
 3. **Build → Authentication → Get started** → enable **two** sign-in methods:
-   - **Anonymous** (players)
+   - **Email/Password** → inside it, also enable the **Email link (passwordless sign-in)** toggle (players verify by emailed link — Firebase sends these emails itself, free)
    - **Google** (admins)
 4. **Authentication → Settings → Authorized domains** → **Add domain** → `YOUR-USERNAME.github.io`
 

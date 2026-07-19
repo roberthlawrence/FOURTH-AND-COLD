@@ -38,7 +38,7 @@ body{
   padding:10px 14px;
   border-bottom:4px solid var(--orange);
 }
-#brand{display:flex;flex-direction:column;line-height:.9;margin-right:auto}
+#brand{display:flex;flex-direction:column;line-height:.9}
 #brandKick{font-family:var(--disp);font-weight:800;font-size:22px;letter-spacing:.04em;color:var(--orange)}
 #brandSeason{font-family:var(--disp);font-weight:600;font-size:13px;letter-spacing:.34em;color:var(--field)}
 #userChip{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--tan)}
@@ -200,8 +200,8 @@ td.sq.payHL{
 #payTable td.emailCell{color:var(--chalk);font-size:12px;max-width:170px;overflow:hidden;text-overflow:ellipsis}
 td.sq.liveLead{animation:leadPulse 1.6s ease-in-out infinite;position:relative;z-index:2}
 @keyframes leadPulse{
-  0%,100%{box-shadow:0 0 0 2px var(--gold)}
-  50%{box-shadow:0 0 0 4px var(--gold), 0 0 18px 3px rgba(255,197,61,.6)}
+  0%,100%{box-shadow:0 0 0 2px #1E6FD9}
+  50%{box-shadow:0 0 0 4px #1E6FD9, 0 0 18px 3px rgba(30,111,217,.55)}
 }
 #boardLegend{
   display:flex;gap:14px;justify-content:center;padding:10px 0 2px;
@@ -360,3 +360,57 @@ td.settledNo{color:#A3271C;font-weight:700}
   font-family:var(--body);font-weight:600;font-size:11px;padding:4px 9px;cursor:pointer;
 }
 .removeWinBtn:hover{background:#A3271C;color:#fff}
+
+
+/* FINAL info chip (non-paying, shows true final score incl. OT) */
+.perChip.finalInfo{background:var(--smoke);border-color:var(--smoke)}
+.perChip.finalInfo .pcLabel{color:var(--gold)}
+.perChip.finalInfo .pcScore{color:#fff}
+.perChip.finalInfo .pcWho{color:var(--tan)}
+
+/* consolidated payouts list */
+.poRow{
+  display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;
+  padding:9px 2px;border-bottom:1px dashed var(--line);font-size:14px;
+}
+.poGame{font-weight:700}
+.poMeta{color:var(--chalk);font-size:12.5px}
+#unpaidBadge{vertical-align:middle;margin-left:6px}
+#unpaidBadge.allPaid{background:#DBF1E0;color:#1E7A33}
+
+/* legend blue for live-lead */
+.lgLive{background:#1E6FD9}
+
+
+/* ---------- logo & watermark ---------- */
+#topLogo{height:42px;width:auto;display:block;flex:0 0 auto}
+#welcomeLogo{height:130px;width:auto;display:block;margin:0 0 10px}
+#bgWatermark{
+  position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:url('logo-dark.png') no-repeat center 68%;
+  background-size:min(44vh,300px);
+  opacity:.045;
+}
+/* keep real content above the watermark */
+#topBar{z-index:50}
+#welcomePanel,main{position:relative;z-index:1}
+
+/* ---------- sticky current-game chip in the top bar ---------- */
+#topGameChip{
+  display:flex;flex-direction:column;align-items:center;line-height:1.05;
+  margin:0 auto;min-width:0;
+}
+#topGameChip .tgName{
+  font-family:var(--data);font-weight:600;font-size:10.5px;letter-spacing:.06em;
+  color:var(--tan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:34vw;
+}
+#topGameChip .tgScore{
+  font-family:var(--disp);font-weight:800;font-size:19px;color:var(--gold);white-space:nowrap;
+}
+#topGameChip .tgScore .tgLive{color:#FF6B5E;font-size:11px;vertical-align:2px;animation:blink 1.4s infinite}
+@media (max-width:480px){
+  #topLogo{height:34px}
+  #brandKick{font-size:18px}
+  #brandSeason{font-size:10px;letter-spacing:.22em}
+  #topGameChip .tgScore{font-size:16px}
+}

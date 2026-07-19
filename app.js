@@ -5,9 +5,10 @@
    ========================================================= */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, onAuthStateChanged, signInAnonymously,
+  getAuth, onAuthStateChanged,
   signInWithPopup, signInWithRedirect, getRedirectResult,
-  GoogleAuthProvider, signOut
+  GoogleAuthProvider, signOut,
+  sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, collection, onSnapshot, getDoc, getDocs,
@@ -36,7 +37,7 @@ const numPeriods = () => soccerMode() ? 2 : 4;
 const periodLabel = (q) =>
   soccerMode() ? (q === 1 ? "HALF" : "FINAL") :
   mlbMode() ? "INN " + q :
-  (q === 4 ? "FINAL" : "Q" + q);
+  "Q" + q; // Q4 pays end-of-regulation; the true final (incl. OT) shows as a separate FINAL chip
 const LIVE_POLL_MS = 60_000;
 /* College season runs Aug–Jan; in Jan the "season" is still last year's */
 function seasonYear() {
@@ -111,7 +112,8 @@ let liveState = null;                     // latest ESPN pull for active game
 let unsubGames = null, unsubSquares = null, unsubCfg = null, unsubPay = null;
 let payments = new Map();                 // email -> payment doc
 let payouts = new Map();                  // "gameId_qN" -> payout confirmation doc
-let unsubPayouts = null;
+let profiles = new Map();                 // emailDocId -> {firstName, lastName, email}
+let unsubPayouts = null, unsubProfiles = null;
 let highlightEmail = null;                // payment-admin highlight: whose squares glow blue
 
 /* ---------------- tiny DOM helpers ---------------- */
@@ -147,17 +149,63 @@ function saveIdentity() {
   } catch (_) {}
 }
 
-/* ---------------- boot ---------------- */
-onAuthStateChanged(auth, async (user) => {
-  if (!user) { await signInAnonymously(auth).catch(err => toast("Auth error: " + err.message)); return; }
-  uid = user.uid;
-  if (!user.isAnonymous && user.email) {
-    // Google sign-in — admin check happens once config loads
+/* ---------------- boot / auth ----------------
+   Players verify their email via a Firebase sign-in link (Firebase sends the
+   email itself — no external service). Admins use Google sign-in. */
+onAuthStateChanged(auth, (user) => {
+  uid = user ? user.uid : null;
+  const isGoogle = !!(user && user.providerData.some(p => p.providerId === "google.com"));
+  if (user && !user.isAnonymous && user.email && isGoogle) {
     adminEmail = user.email.toLowerCase();
+  } else if (!user) {
+    adminEmail = null;
   }
-  startListeners();
+  // Verified player session but no saved identity (cleared storage, etc.):
+  // restore from their profile so they never re-type anything
+  if (user && !user.isAnonymous && user.email && !isGoogle && !loadIdentity()) {
+    const email = user.email.toLowerCase();
+    fetchProfile(email).then(prof => {
+      me = { fullName: profileName(prof, email), email };
+      saveIdentity(); route();
+    });
+  }
   route();
+  if (cfg) onConfig();
 });
+
+/* True when the signed-in auth session matches the entered identity */
+function isVerifiedPlayer() {
+  const u = auth.currentUser;
+  return !!(u && !u.isAnonymous && (u.email || "").toLowerCase() === me.email && me.email);
+}
+
+/* Complete a verification link if the page was opened from one */
+async function completeEmailLinkIfPresent() {
+  if (!isSignInWithEmailLink(auth, location.href)) return;
+  let pending = {};
+  try { pending = JSON.parse(localStorage.getItem("fc_pending") || "{}"); } catch (_) {}
+  let email = pending.email;
+  if (!email) email = (prompt("Confirm the email address you're verifying:") || "").trim();
+  if (!email) return;
+  email = email.toLowerCase();
+  try {
+    await signInWithEmailLink(auth, email, location.href);
+    const first = (pending.first || "").trim(), last = (pending.last || "").trim();
+    me = { fullName: (first + " " + last).trim() || email.split("@")[0], email };
+    saveIdentity();
+    localStorage.removeItem("fc_pending");
+    // Canonical profile: one name per email, used everywhere names are shown
+    setDoc(doc(db, "profiles", payDocId(email)), {
+      firstName: first, lastName: last, email, updatedAt: serverTimestamp()
+    }, { merge: true }).catch(() => {});
+    audit("player.verified", email);
+    history.replaceState(null, "", location.pathname);
+    toast("Email verified — welcome to the board! 🤘");
+    route();
+  } catch (err) {
+    toast("Verification failed: " + (err.message || err) + " — tap Resend for a fresh link.");
+  }
+}
 
 function route() {
   const hasId = loadIdentity();
@@ -186,19 +234,28 @@ function startListeners() {
     games.sort((a, b) => (a.order || 0) - (b.order || 0));
     if (!activeGameId && games.length) activeGameId = defaultGame().id;
     renderTabs(); renderBoard(); renderWinners(); renderAdminGame(); renderPot(); renderWinnerBanner();
+    if (isAdmin()) renderPayoutsList();
   });
   unsubPayouts = onSnapshot(collection(db, "payouts"), (qs) => {
     payouts.clear();
     qs.forEach(d => payouts.set(d.id, d.data()));
     renderWinners(); renderWinnerBanner();
+    if (isAdmin()) renderPayoutsList();
   });
 }
 
 function defaultGame() {
-  // pick today's game if any, else next upcoming, else last
-  const today = new Date(); today.setHours(0,0,0,0);
-  const upcoming = games.find(g => new Date(g.date + "T23:59:59") >= today);
-  return upcoming || games[games.length - 1];
+  // Land on the game that matters: preseason → game 1; in season → the live or
+  // next game; a finished game keeps the spotlight for 3 days ("did I win?"),
+  // then the default rolls forward.
+  const now = Date.now();
+  const AFTERGLOW = 3 * 86400000;
+  const pick = games.find(g => {
+    if (!g.finalScore) return true; // not finished (upcoming, live, or awaiting score pull)
+    const t = Date.parse((g.date || "") + "T12:00:00");
+    return !isNaN(t) && now < t + AFTERGLOW; // finished, still in its 3-day window
+  });
+  return pick || games[games.length - 1];
 }
 
 function isPowerAdmin() {
@@ -263,23 +320,102 @@ function onConfig() {
         renderPayments(); renderPot(); renderMyPanel();
       });
     }
+    if (!unsubProfiles) {
+      unsubProfiles = onSnapshot(collection(db, "profiles"), (qs) => {
+        profiles.clear();
+        qs.forEach(d => profiles.set(d.id, d.data()));
+        renderPayments();
+      });
+    }
   }
   renderBoard(); renderMyPanel(); renderPot(); renderVenmo();
 }
 
-/* ---------------- welcome / identity flow ---------------- */
-$("enterBoardBtn").onclick = () => {
-  const n = $("wFullName").value.trim();
-  const e = $("wEmail").value.trim().toLowerCase();
-  if (!n || !e || !e.includes("@")) { toast("Enter your full name and a valid email."); return; }
-  me = { fullName: n, email: e };
-  saveIdentity();
-  route();
-  renderBoard(); renderMyPanel(); renderWinnerBanner();
+/* ---------------- welcome / identity flow (email-first) ----------------
+   1. Email only. If the browser still holds a verified session for it, they're
+      in instantly — no link, no typing.
+   2. Known email (profile exists) but no live session: auto-fill their name,
+      send the sign-in link, skip the name step.
+   3. Brand-new email: ask first/last name once, then send the link. */
+let pendingEmail = "";
+async function fetchProfile(email) {
+  try {
+    const snap = await getDoc(doc(db, "profiles", payDocId(email)));
+    return snap.exists() ? snap.data() : null;
+  } catch (_) { return null; }
+}
+function profileName(p, email) {
+  return (((p?.firstName || "") + " " + (p?.lastName || "")).trim()) || email.split("@")[0];
+}
+$("continueBtn").onclick = async () => {
+  const email = $("wEmail").value.trim().toLowerCase();
+  if (!email || !email.includes("@")) { toast("Enter a valid email."); return; }
+  pendingEmail = email;
+  // Already signed in as this email on this device? Straight in.
+  const u = auth.currentUser;
+  if (u && !u.isAnonymous && (u.email || "").toLowerCase() === email) {
+    const prof = await fetchProfile(email);
+    me = { fullName: profileName(prof, email), email };
+    saveIdentity(); route();
+    toast("Welcome back, " + me.fullName.split(" ")[0] + "!");
+    return;
+  }
+  const prof = await fetchProfile(email);
+  if (prof) {
+    // Known player — no name re-entry, just re-verify on this device
+    try {
+      await sendVerifyLink(prof.firstName || "", prof.lastName || "", email);
+      toast("Welcome back, " + (prof.firstName || "friend") + " — sign-in link sent.");
+    } catch (err) { toast("Couldn't send link: " + (err.message || err)); }
+  } else {
+    $("emailStep").classList.add("hidden");
+    $("nameStep").classList.remove("hidden");
+    setTimeout(() => $("wFirstName").focus(), 50);
+  }
 };
-$("switchUserBtn").onclick = () => {
+async function sendVerifyLink(first, last, email) {
+  localStorage.setItem("fc_pending", JSON.stringify({ first, last, email }));
+  await sendSignInLinkToEmail(auth, email, {
+    url: location.origin + location.pathname,
+    handleCodeInApp: true
+  });
+  $("verifySentTo").textContent = email;
+  $("emailStep").classList.add("hidden");
+  $("nameStep").classList.add("hidden");
+  $("verifyStep").classList.remove("hidden");
+}
+$("sendLinkBtn").onclick = async () => {
+  const first = $("wFirstName").value.trim();
+  const last = $("wLastName").value.trim();
+  if (!first || !last) { toast("Enter your first and last name."); return; }
+  if (!pendingEmail) { $("nameStep").classList.add("hidden"); $("emailStep").classList.remove("hidden"); return; }
+  try {
+    await sendVerifyLink(first, last, pendingEmail);
+    toast("Verification link sent — check your email (and spam folder).");
+  } catch (err) {
+    toast("Couldn't send link: " + (err.message || err) +
+      " (Admin: is 'Email link' sign-in enabled in Firebase Authentication?)");
+  }
+};
+$("resendLinkBtn").onclick = async () => {
+  let pending = {};
+  try { pending = JSON.parse(localStorage.getItem("fc_pending") || "{}"); } catch (_) {}
+  if (!pending.email) { $("verifyStep").classList.add("hidden"); $("emailStep").classList.remove("hidden"); return; }
+  try {
+    await sendVerifyLink(pending.first || "", pending.last || "", pending.email);
+    toast("Link re-sent.");
+  } catch (err) { toast("Couldn't resend: " + (err.message || err)); }
+};
+$("changeEmailBtn").onclick = () => {
+  $("verifyStep").classList.add("hidden");
+  $("nameStep").classList.add("hidden");
+  $("emailStep").classList.remove("hidden");
+};
+$("switchUserBtn").onclick = async () => {
   localStorage.removeItem("fc_name"); localStorage.removeItem("fc_email");
+  localStorage.removeItem("fc_pending");
   me = { fullName: "", email: "" };
+  try { if (auth.currentUser && !adminEmail) await signOut(auth); } catch (_) {}
   route();
 };
 
@@ -318,6 +454,32 @@ getRedirectResult(auth).then(res => {
 }).catch(() => {});
 
 /* ---------------- game tabs ---------------- */
+/* Sticky top-bar chip: selected game + score, visible from anywhere on the page */
+function renderTopGameChip() {
+  const box = $("topGameChip");
+  const g = currentGame();
+  box.innerHTML = "";
+  if (!g) return;
+  const label = (soccerMode() || mlbMode()) ? (g.opponent || g.id) : "TEX vs " + (g.opponent || "TBD");
+  box.appendChild(el("span", "tgName", label));
+  const score = el("span", "tgScore");
+  if (liveState && liveState.gameId === g.id && (liveState.inProgress || liveState.done)) {
+    score.textContent = `${liveState.texasScore}–${liveState.oppScore} `;
+    if (liveState.done) score.append("F");
+    else {
+      const per = (soccerMode() ? "H" : mlbMode() ? "I" : "Q") + liveState.period;
+      const live = el("span", "tgLive", "● ");
+      score.append(live, per);
+    }
+  } else if (g.finalScore) {
+    score.textContent = `${g.finalScore.t}–${g.finalScore.o} F`;
+  } else {
+    const d = new Date((g.date || "") + "T12:00:00");
+    score.textContent = isNaN(d) ? "" : (d.getMonth() + 1) + "/" + d.getDate();
+  }
+  box.appendChild(score);
+}
+
 function renderTabs() {
   const nav = $("gameTabs");
   nav.innerHTML = "";
@@ -331,6 +493,7 @@ function renderTabs() {
     b.onclick = () => { activeGameId = g.id; stopLivePoll(); renderTabs(); renderBoard(); renderWinners(); renderAdminGame(); maybeStartLivePoll(); };
     nav.appendChild(b);
   });
+  renderTopGameChip();
 }
 
 /* ---------------- board render ---------------- */
@@ -370,6 +533,18 @@ function renderPeriodStrip(g) {
       chip.appendChild(el("span", "pcWho empty", ""));
     }
     strip.appendChild(chip);
+  }
+  // Informational FINAL chip: the true final score (OT/extra innings included).
+  // For football this is display-only — Q4 above is what pays.
+  if (!soccerMode() && g.finalScore) {
+    anyContent = true;
+    const fin = el("div", "perChip hasWin finalInfo");
+    fin.appendChild(el("span", "pcLabel", "FINAL"));
+    fin.appendChild(el("span", "pcScore", `${g.finalScore.t}–${g.finalScore.o}`));
+    const wentLong = (g.finalScore.periods || 0) > numPeriods();
+    fin.appendChild(el("span", "pcWho empty",
+      mlbMode() ? "full game" : (wentLong ? "OT — Q4 pays" : "game over")));
+    strip.appendChild(fin);
   }
   // Nothing recorded and nothing live? Hide the strip to keep pre-game clean.
   if (!anyContent) strip.innerHTML = "";
@@ -465,6 +640,10 @@ function renderBoard() {
 let modalCtx = null;
 function onSquareTap(row, col, sq) {
   if (!me.email) { toast("Enter your name and email first."); route(); return; }
+  if (!isVerifiedPlayer() && !isAdmin()) {
+    toast("Your email session expired — tap 'switch' up top and re-verify to claim or edit squares.");
+    return;
+  }
   const locked = !!cfg?.boardLocked;
   const mine = sq && sq.email === me.email;
   const admin = isAdmin();
@@ -591,6 +770,40 @@ function winnerKeysForGame(g) {
 }
 const payoutId = (gameId, q) => `${gameId}_q${q}`;
 
+async function markPayoutPaid(g, q, w) {
+  if (!confirm(`Confirm ${money(cfg?.payoutPerWin)} sent to ${w.fullName} for ${g.opponent || g.id} ${periodLabel(q)}?`)) return;
+  try {
+    await setDoc(doc(db, "payouts", payoutId(g.id, q)), {
+      gameId: g.id, period: q,
+      email: w.email, fullName: w.fullName, squareName: w.squareName,
+      amount: cfg?.payoutPerWin || 0,
+      paid: true, paidBy: adminEmail, paidAt: serverTimestamp()
+    });
+    audit("payout.sent", `${g.opponent || g.id} ${periodLabel(q)} — ${money(cfg?.payoutPerWin)} to ${w.fullName} (${w.email})`);
+    toast("Payout marked as sent.");
+  } catch (err) { toast(friendlyErr(err)); }
+}
+async function undoPayout(g, q, w) {
+  if (!confirm(`Undo payout confirmation for ${w.squareName} (${g.opponent || g.id} ${periodLabel(q)})?`)) return;
+  try {
+    await deleteDoc(doc(db, "payouts", payoutId(g.id, q)));
+    audit("payout.undo", `${g.opponent || g.id} ${periodLabel(q)} — ${w.fullName} (${w.email})`);
+    toast("Payout confirmation removed.");
+  } catch (err) { toast(friendlyErr(err)); }
+}
+/* All unpaid winners across every game */
+function unpaidWinners() {
+  const out = [];
+  games.forEach(g => {
+    Object.entries(g.winners || {}).forEach(([qKey, w]) => {
+      if (!w || w.empty) return;
+      const q = Number(qKey.slice(1));
+      if (!payouts.get(payoutId(g.id, q))?.paid) out.push({ g, q, w });
+    });
+  });
+  return out;
+}
+
 function renderWinners() {
   const list = $("winnersList");
   list.innerHTML = "";
@@ -637,32 +850,13 @@ function renderWinners() {
         if (isAdmin()) {
           badge.title = "Tap to undo";
           badge.style.cursor = "pointer";
-          badge.onclick = async () => {
-            if (!confirm(`Undo payout confirmation for ${w.squareName}?`)) return;
-            try {
-              await deleteDoc(doc(db, "payouts", payoutId(g.id, idx + 1)));
-              audit("payout.undo", `${g.opponent || g.id} ${periodLabel(idx + 1)} — ${w.fullName} (${w.email})`);
-              toast("Payout confirmation removed.");
-            } catch (err) { toast(friendlyErr(err)); }
-          };
+          badge.onclick = () => undoPayout(g, idx + 1, w);
         }
         payCol.appendChild(badge);
       } else if (isAdmin()) {
         const btn = el("button", "markPaidBtn", "Mark paid");
         btn.type = "button";
-        btn.onclick = async () => {
-          if (!confirm(`Confirm ${money(cfg?.payoutPerWin)} sent to ${w.fullName} for ${periodLabel(idx + 1)}?`)) return;
-          try {
-            await setDoc(doc(db, "payouts", payoutId(g.id, idx + 1)), {
-              gameId: g.id, period: idx + 1,
-              email: w.email, fullName: w.fullName, squareName: w.squareName,
-              amount: cfg?.payoutPerWin || 0,
-              paid: true, paidBy: adminEmail, paidAt: serverTimestamp()
-            });
-            audit("payout.sent", `${g.opponent || g.id} ${periodLabel(idx + 1)} — ${money(cfg?.payoutPerWin)} to ${w.fullName} (${w.email})`);
-            toast("Payout marked as sent.");
-          } catch (err) { toast(friendlyErr(err)); }
-        };
+        btn.onclick = () => markPayoutPaid(g, idx + 1, w);
         payCol.appendChild(btn);
       } else {
         payCol.appendChild(el("span", "payBadge proc", "processing"));
@@ -863,19 +1057,36 @@ function computePeriodWinners(g, comp) {
 /* Auto-record: while a power admin has the page open on game day, newly
    completed periods get written automatically — no button pushing. Everyone
    else sees them appear in real time via Firestore sync. */
+/* Final game score (incl. OT/extra innings) for the informational FINAL chip */
+function finalScoreOf(comp) {
+  const { texas, opp } = pickCompetitors(comp);
+  return {
+    t: Number(texas?.score || 0),
+    o: Number(opp?.score || 0),
+    periods: Math.max((texas?.linescores || []).length, (opp?.linescores || []).length)
+  };
+}
 async function autoRecordWinners(g, comp) {
   if (!isPowerAdmin()) return;
   const computed = computePeriodWinners(g, comp);
   const existing = g.winners || {};
   const newKeys = Object.keys(computed).filter(k => !existing[k]);
-  if (!newKeys.length) return;
-  const winners = { ...existing };
-  newKeys.forEach(k => winners[k] = computed[k]);
+  const state = comp.status?.type?.state;
+  const updates = {};
+  if (newKeys.length) {
+    const winners = { ...existing };
+    newKeys.forEach(k => winners[k] = computed[k]);
+    updates.winners = winners;
+  }
+  if (state === "post" && !g.finalScore) updates.finalScore = finalScoreOf(comp);
+  if (!Object.keys(updates).length) return;
   try {
-    await updateDoc(doc(db, "games", g.id), { winners });
-    const summary = newKeys.map(k => `${periodLabel(Number(k.slice(1)))}: ${winners[k].squareName}`).join(" · ");
-    audit("winner.auto", `${g.opponent || g.id} — ${summary}`);
-    toast("Winner recorded — " + summary);
+    await updateDoc(doc(db, "games", g.id), updates);
+    if (newKeys.length) {
+      const summary = newKeys.map(k => `${periodLabel(Number(k.slice(1)))}: ${updates.winners[k].squareName}`).join(" · ");
+      audit("winner.auto", `${g.opponent || g.id} — ${summary}`);
+      toast("Winner recorded — " + summary);
+    }
   } catch (_) { /* another admin's device may have written it first — fine */ }
 }
 async function pullLive() {
@@ -1077,6 +1288,10 @@ $("copyAnnounceBtn").onclick = async () => {
     lines.push(`${periodLabel(q)}: ${w.squareName}${w.fullName ? " (" + w.fullName + ")" : ""} — ${w.texasScore}-${w.oppScore}${w.empty ? " → tailgate fund" : " wins " + money(cfg?.payoutPerWin)}`);
   }
   if (!any) { toast("No winners recorded for this game yet."); return; }
+  if (!soccerMode() && g.finalScore) {
+    const wentLong = (g.finalScore.periods || 0) > numPeriods();
+    lines.push(`FINAL: ${g.finalScore.t}-${g.finalScore.o}${wentLong && !mlbMode() ? " (OT — Q4 score pays)" : ""}`);
+  }
   lines.push("", "Board: " + location.href.split("#")[0].split("?")[0]);
   const text = lines.join("\n");
   // Phones: open the native share sheet (Messages, Mail, Facebook, etc.)
@@ -1162,7 +1377,10 @@ $("pullScoresBtn").onclick = async () => {
       winners[k] = computed[k];
       recorded.push(`${periodLabel(Number(k.slice(1)))}: ${computed[k].squareName} (${computed[k].texasScore}–${computed[k].oppScore})`);
     });
-    await updateDoc(doc(db, "games", g.id), { winners, espnEventId: eventId });
+    const state = comp.status?.type?.state;
+    const gameUpdates = { winners, espnEventId: eventId };
+    if (state === "post") gameUpdates.finalScore = finalScoreOf(comp);
+    await updateDoc(doc(db, "games", g.id), gameUpdates);
     if (recorded.length) audit("winner.espnPull", `${g.opponent || g.id}: ${recorded.join(" · ")}`);
     $("pullResult").textContent = recorded.length
       ? "Recorded → " + recorded.join(" · ")
@@ -1176,11 +1394,16 @@ $("pullScoresBtn").onclick = async () => {
 /* ---------------- ADMIN: payments ---------------- */
 const payDocId = (email) => email.replace(/[.#$/\[\]]/g, ",");
 function paymentRollup() {
-  // aggregate squares by email
+  // aggregate squares by email; display the canonical profile name when we
+  // have one (per-claim names can drift if someone re-enters differently)
   const byEmail = new Map();
   squares.forEach(s => {
     const k = s.email;
-    if (!byEmail.has(k)) byEmail.set(k, { fullName: s.fullName, email: k, count: 0 });
+    if (!byEmail.has(k)) {
+      const prof = profiles.get(payDocId(k));
+      const profName = prof ? ((prof.firstName || "") + " " + (prof.lastName || "")).trim() : "";
+      byEmail.set(k, { fullName: profName || s.fullName, email: k, count: 0 });
+    }
     byEmail.get(k).count++;
   });
   return [...byEmail.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -1252,6 +1475,55 @@ function renderPayments() {
   wrap.innerHTML = "";
   if (!rows.length) wrap.appendChild(el("div", "emptyNote", "No squares claimed yet."));
   else wrap.appendChild(table);
+  renderPayoutsList();
+}
+
+/* One screen, every game: outstanding + confirmed winner payouts */
+function renderPayoutsList() {
+  if (!isAdmin()) return;
+  const list = $("payoutsList");
+  const badge = $("unpaidBadge");
+  list.innerHTML = "";
+  const all = [];
+  games.forEach(g => {
+    Object.entries(g.winners || {}).forEach(([qKey, w]) => {
+      if (!w || w.empty) return;
+      const q = Number(qKey.slice(1));
+      all.push({ g, q, w, payout: payouts.get(payoutId(g.id, q)) });
+    });
+  });
+  const unpaid = all.filter(x => !x.payout?.paid);
+  badge.classList.remove("hidden");
+  if (!all.length) {
+    badge.classList.add("hidden");
+    list.appendChild(el("div", "emptyNote", "No winners recorded yet."));
+    return;
+  }
+  badge.textContent = unpaid.length ? `${unpaid.length} UNPAID` : "ALL PAID ✓";
+  badge.classList.toggle("allPaid", !unpaid.length);
+  // Unpaid first, then paid — grouped so the to-do list is on top
+  [...unpaid, ...all.filter(x => x.payout?.paid)].forEach(({ g, q, w, payout }) => {
+    const row = el("div", "poRow");
+    const left = el("div");
+    left.appendChild(el("div", "poGame", `${g.opponent || g.id} · ${periodLabel(q)} — ${w.fullName || w.squareName}`));
+    left.appendChild(el("div", "poMeta",
+      `${w.squareName} · ${w.email} · ${money(cfg?.payoutPerWin)}${payout?.paid && payout.paidBy ? " · confirmed by " + payout.paidBy : ""}`));
+    row.appendChild(left);
+    const right = el("div");
+    if (payout?.paid) {
+      const b = el("span", "payBadge sent", "PAID ✓");
+      b.title = "Tap to undo"; b.style.cursor = "pointer";
+      b.onclick = () => undoPayout(g, q, w);
+      right.appendChild(b);
+    } else {
+      const btn = el("button", "markPaidBtn", "Mark paid");
+      btn.type = "button";
+      btn.onclick = () => markPayoutPaid(g, q, w);
+      right.appendChild(btn);
+    }
+    row.appendChild(right);
+    list.appendChild(row);
+  });
 }
 
 /* ---------------- ADMIN: season setup ---------------- */
@@ -1484,11 +1756,12 @@ function appendAuditRows(snap) {
 async function loadAuditPage(reset) {
   const list = $("auditList");
   if (reset) { list.innerHTML = ""; auditCursor = null; }
+  const pageSize = reset ? 5 : AUDIT_PAGE; // short first page keeps the panel compact
   try {
     const parts = [collection(db, "audit"), orderBy("ts", "desc")];
     const qy = auditCursor
-      ? query(parts[0], parts[1], startAfter(auditCursor), limit(AUDIT_PAGE))
-      : query(parts[0], parts[1], limit(AUDIT_PAGE));
+      ? query(parts[0], parts[1], startAfter(auditCursor), limit(pageSize))
+      : query(parts[0], parts[1], limit(pageSize));
     const snap = await getDocs(qy);
     if (reset && snap.empty) {
       list.appendChild(el("div", "emptyNote", "No activity recorded yet."));
@@ -1498,7 +1771,7 @@ async function loadAuditPage(reset) {
     appendAuditRows(snap);
     auditCursor = snap.docs[snap.docs.length - 1] || auditCursor;
     // More pages likely if we got a full page back
-    $("auditMoreBtn").classList.toggle("hidden", snap.size < AUDIT_PAGE);
+    $("auditMoreBtn").classList.toggle("hidden", snap.size < pageSize);
     if (!reset && snap.empty) toast("That's the whole log.");
   } catch (err) {
     list.appendChild(el("div", "emptyNote", "Couldn't load audit log: " + (err.message || err)));
@@ -1542,5 +1815,7 @@ $("auditDownloadBtn").onclick = async () => {
   } catch (err) { toast("Download failed: " + (err.message || err)); }
 };
 
-/* ---------------- kick off live polling on load ---------------- */
+/* ---------------- kick off ---------------- */
+startListeners();
+completeEmailLinkIfPresent();
 setTimeout(() => maybeStartLivePoll(), 2500);
