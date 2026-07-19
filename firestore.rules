@@ -30,16 +30,14 @@ service cloud.firestore {
       allow update, delete: if isPowerAdmin();
     }
 
-    // ---- squares: public read. Claiming requires a VERIFIED email session
-    // (email-link sign-in) matching the claim's email — or any admin.
+    // ---- squares: public read; create when board open (anonymous sessions
+    // included — identity is email honor-system with double-entry at signup).
+    // Rename/release by the claiming device (uid) while open, or any admin.
     match /squares/{squareId} {
       allow read: if true;
       allow create: if request.auth != null
         && boardOpen()
         && request.resource.data.uid == request.auth.uid
-        && (isAnyAdmin()
-            || ('email' in request.auth.token
-                && request.auth.token.email.lower() == request.resource.data.email))
         && request.resource.data.row is int
         && request.resource.data.col is int
         && request.resource.data.row >= 1 && request.resource.data.row <= 10
@@ -68,16 +66,17 @@ service cloud.firestore {
                     && request.auth.token.email.lower() == resource.data.email)));
     }
 
-    // ---- profiles: canonical first/last name per email. Public read so the
-    // login flow can greet returning players before they re-verify (names are
-    // already visible on the public board, so this exposes nothing new).
-    // Owners write their own (verified email must match); admins can fix any.
+    // ---- profiles: canonical first/last name per email (+ mirrored payment
+    // total so players can see their own balance). Public read powers the
+    // email-first login greeting. Create at join (any session); updates by
+    // the device that created it or any admin.
     match /profiles/{profileId} {
       allow read: if true;
-      allow create, update: if request.auth != null
-        && (isAnyAdmin()
-            || ('email' in request.auth.token
-                && request.auth.token.email.lower() == request.resource.data.email));
+      allow create: if request.auth != null
+        && request.resource.data.email is string
+        && request.resource.data.email.size() >= 3;
+      allow update: if isAnyAdmin()
+        || (request.auth != null && resource.data.uid == request.auth.uid);
       allow delete: if isAnyAdmin();
     }
 
@@ -87,15 +86,10 @@ service cloud.firestore {
       allow write: if isPowerAdmin();
     }
 
-    // ---- payments: writes are admin-only. Reads: admins see all; a verified
-    // player may read exactly their own record (drives their balance display
-    // and the pre-filled Venmo amount).
+    // ---- payments: private, admin-only. Players see their received total
+    // via the mirrored field on their public profile instead.
     match /payments/{payId} {
-      allow read: if isAnyAdmin()
-        || (request.auth != null
-            && 'email' in request.auth.token
-            && request.auth.token.email.lower() == resource.data.email);
-      allow write: if isAnyAdmin();
+      allow read, write: if isAnyAdmin();
     }
 
     // ---- payout confirmations: public read (winners see their status);

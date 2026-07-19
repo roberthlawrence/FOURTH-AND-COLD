@@ -5,10 +5,9 @@
    ========================================================= */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, onAuthStateChanged,
+  getAuth, onAuthStateChanged, signInAnonymously,
   signInWithPopup, signInWithRedirect, getRedirectResult,
-  GoogleAuthProvider, signOut,
-  sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink
+  GoogleAuthProvider, signOut
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, collection, onSnapshot, getDoc, getDocs,
@@ -164,70 +163,27 @@ function saveIdentity() {
 }
 
 /* ---------------- boot / auth ----------------
-   Players verify their email via a Firebase sign-in link (Firebase sends the
-   email itself — no external service). Admins use Google sign-in. */
-onAuthStateChanged(auth, (user) => {
-  uid = user ? user.uid : null;
-  const isGoogle = !!(user && user.providerData.some(p => p.providerId === "google.com"));
-  if (user && !user.isAnonymous && user.email && isGoogle) {
-    adminEmail = user.email.toLowerCase();
-  } else if (!user) {
+   Players get an invisible anonymous session (needed to write claims).
+   Identity is email-based with double-entry confirmation at signup.
+   Admins use Google sign-in. */
+onAuthStateChanged(auth, async (user) => {
+  if (!user) {
     adminEmail = null;
+    await signInAnonymously(auth).catch(err => toast("Auth error: " + err.message));
+    return;
   }
-  // Verified player session but no saved identity (cleared storage, etc.):
-  // restore from their profile so they never re-type anything
-  if (user && !user.isAnonymous && user.email && !isGoogle && !loadIdentity()) {
-    const email = user.email.toLowerCase();
-    fetchProfile(email).then(prof => {
-      me = { fullName: profileName(prof, email), email };
-      saveIdentity(); route();
-    });
+  uid = user.uid;
+  if (!user.isAnonymous && user.email &&
+      user.providerData.some(p => p.providerId === "google.com")) {
+    adminEmail = user.email.toLowerCase();
   }
   route();
   if (cfg) onConfig();
 });
 
-/* True when the signed-in auth session matches the entered identity */
-function isVerifiedPlayer() {
-  const u = auth.currentUser;
-  return !!(u && !u.isAnonymous && (u.email || "").toLowerCase() === me.email && me.email);
-}
-
-/* Complete a verification link if the page was opened from one */
-async function completeEmailLinkIfPresent() {
-  if (!isSignInWithEmailLink(auth, location.href)) return;
-  showLoading();
-  let pending = {};
-  try { pending = JSON.parse(localStorage.getItem("fc_pending") || "{}"); } catch (_) {}
-  let email = pending.email;
-  if (!email) email = (prompt("Confirm the email address you're verifying:") || "").trim();
-  if (!email) return;
-  email = email.toLowerCase();
-  try {
-    await signInWithEmailLink(auth, email, location.href);
-    let first = (pending.first || "").trim(), last = (pending.last || "").trim();
-    if (!first && !last) {
-      // Returning player via a fresh link — pull their canonical name
-      const prof = await fetchProfile(email);
-      first = prof?.firstName || ""; last = prof?.lastName || "";
-    }
-    me = { fullName: (first + " " + last).trim() || email.split("@")[0], email };
-    saveIdentity();
-    localStorage.removeItem("fc_pending");
-    // Canonical profile: one name per email; never overwrite names with blanks
-    const profUpdate = { email, updatedAt: serverTimestamp() };
-    if (first) profUpdate.firstName = first;
-    if (last) profUpdate.lastName = last;
-    setDoc(doc(db, "profiles", payDocId(email)), profUpdate, { merge: true }).catch(() => {});
-    audit("player.verified", email);
-    history.replaceState(null, "", location.pathname);
-    toast("Email verified — welcome to the board! 🤘");
-    route();
-    refreshMyPayment();
-  } catch (err) {
-    toast("Verification failed: " + (err.message || err) + " — tap Resend for a fresh link.");
-  }
-  hideLoading();
+/* Player can act once they have an identity and any auth session */
+function canAct() {
+  return !!(auth.currentUser && me.email);
 }
 
 function route() {
@@ -389,7 +345,6 @@ async function refreshIdentityFromProfile() {
 /* Tap your name in the top bar to fix a typo — updates the profile everywhere */
 $("userChipName").onclick = async () => {
   if (!me.email) return;
-  if (!isVerifiedPlayer() && !isAdmin()) { toast("Re-verify your email first to update your name."); return; }
   const prof = await fetchProfile(me.email) || {};
   const first = (prompt("First name:", prof.firstName || me.fullName.split(" ")[0] || "") || "").trim();
   if (!first) return;
@@ -420,10 +375,9 @@ $("continueBtn").onclick = async () => {
   if (!email || !email.includes("@")) { toast("Enter a valid email."); return; }
   pendingEmail = email;
   showLoading();
-  // Already signed in as this email on this device? Straight in.
-  const u = auth.currentUser;
-  if (u && !u.isAnonymous && (u.email || "").toLowerCase() === email) {
-    const prof = await fetchProfile(email);
+  const prof = await fetchProfile(email);
+  if (prof) {
+    // Known email — straight in, name auto-loaded
     me = { fullName: profileName(prof, email), email };
     saveIdentity(); route();
     refreshMyPayment();
@@ -431,68 +385,52 @@ $("continueBtn").onclick = async () => {
     toast("Welcome back, " + me.fullName.split(" ")[0] + "!");
     return;
   }
-  const prof = await fetchProfile(email);
-  if (prof) {
-    // Known player — no name re-entry, just re-verify on this device
-    try {
-      await sendVerifyLink(prof.firstName || "", prof.lastName || "", email);
-      toast("Welcome back, " + (prof.firstName || "friend") + " — sign-in link sent.");
-    } catch (err) { toast("Couldn't send link: " + (err.message || err)); }
-  } else {
-    $("emailStep").classList.add("hidden");
-    $("nameStep").classList.remove("hidden");
-    setTimeout(() => $("wFirstName").focus(), 50);
-  }
+  // Brand-new email → name + confirm-email step
+  $("emailStep").classList.add("hidden");
+  $("nameStep").classList.remove("hidden");
+  setTimeout(() => $("wFirstName").focus(), 50);
   hideLoading();
 };
-async function sendVerifyLink(first, last, email) {
-  localStorage.setItem("fc_pending", JSON.stringify({ first, last, email }));
-  await sendSignInLinkToEmail(auth, email, {
-    url: location.origin + location.pathname,
-    handleCodeInApp: true
-  });
-  $("verifySentTo").textContent = email;
-  $("emailStep").classList.add("hidden");
-  $("nameStep").classList.add("hidden");
-  $("verifyStep").classList.remove("hidden");
-}
-$("sendLinkBtn").onclick = async () => {
+/* New player joins: names + email typed a second time. Match → in. Mismatch →
+   error and back to square one (typo protection without email round-trips). */
+$("joinBtn").onclick = async () => {
   const first = $("wFirstName").value.trim();
   const last = $("wLastName").value.trim();
+  const confirmEmail = $("wEmailConfirm").value.trim().toLowerCase();
   if (!first || !last) { toast("Enter your first and last name."); return; }
   if (!pendingEmail) { $("nameStep").classList.add("hidden"); $("emailStep").classList.remove("hidden"); return; }
-  showLoading();
-  try {
-    await sendVerifyLink(first, last, pendingEmail);
-    toast("Verification link sent — check your email (and spam folder).");
-  } catch (err) {
-    toast("Couldn't send link: " + (err.message || err) +
-      " (Admin: is 'Email link' sign-in enabled in Firebase Authentication?)");
+  if (confirmEmail !== pendingEmail) {
+    toast("Emails didn't match — let's try that again from the top.");
+    $("wEmail").value = ""; $("wEmailConfirm").value = "";
+    $("wFirstName").value = ""; $("wLastName").value = "";
+    pendingEmail = "";
+    $("nameStep").classList.add("hidden");
+    $("emailStep").classList.remove("hidden");
+    setTimeout(() => $("wEmail").focus(), 50);
+    return;
   }
-  hideLoading();
-};
-$("resendLinkBtn").onclick = async () => {
-  let pending = {};
-  try { pending = JSON.parse(localStorage.getItem("fc_pending") || "{}"); } catch (_) {}
-  if (!pending.email) { $("verifyStep").classList.add("hidden"); $("emailStep").classList.remove("hidden"); return; }
   showLoading();
   try {
-    await sendVerifyLink(pending.first || "", pending.last || "", pending.email);
-    toast("Link re-sent.");
-  } catch (err) { toast("Couldn't resend: " + (err.message || err)); }
+    if (!auth.currentUser) await signInAnonymously(auth);
+    me = { fullName: first + " " + last, email: pendingEmail };
+    saveIdentity();
+    await setDoc(doc(db, "profiles", payDocId(pendingEmail)), {
+      firstName: first, lastName: last, email: pendingEmail,
+      uid: auth.currentUser.uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+    }, { merge: true });
+    audit("player.join", pendingEmail);
+    route();
+    refreshMyPayment();
+    toast("Welcome to the board, " + first + "! 🤘");
+  } catch (err) { toast(friendlyErr(err)); }
   hideLoading();
-};
-$("changeEmailBtn").onclick = () => {
-  $("verifyStep").classList.add("hidden");
-  $("nameStep").classList.add("hidden");
-  $("emailStep").classList.remove("hidden");
 };
 $("switchUserBtn").onclick = async () => {
   showLoading();
   localStorage.removeItem("fc_name"); localStorage.removeItem("fc_email");
   localStorage.removeItem("fc_pending");
   me = { fullName: "", email: "" };
-  try { if (auth.currentUser && !adminEmail) await signOut(auth); } catch (_) {}
+  // keep the anonymous session — same device keeps edit rights on its claims
   route();
   hideLoading();
 };
@@ -718,8 +656,8 @@ function renderBoard() {
 let modalCtx = null;
 function onSquareTap(row, col, sq) {
   if (!me.email) { toast("Enter your name and email first."); route(); return; }
-  if (!isVerifiedPlayer() && !isAdmin()) {
-    toast("Your email session expired — tap 'switch' up top and re-verify to claim or edit squares.");
+  if (!canAct() && !isAdmin()) {
+    toast("One sec — still connecting. Try again in a moment.");
     return;
   }
   const locked = !!cfg?.boardLocked;
@@ -832,11 +770,11 @@ function renderMyPanel() {
 let myPayment = null;
 async function refreshMyPayment() {
   if (!me.email) { myPayment = null; return; }
-  try {
-    const s = await getDoc(doc(db, "payments", payDocId(me.email)));
-    myPayment = s.exists() ? s.data() : null;
-    renderMyPanel();
-  } catch (_) { /* not signed in yet or no record — full amount applies */ }
+  // Players read their received-amount from the public profile mirror
+  // (admins write it there whenever they log a payment)
+  const prof = await fetchProfile(me.email);
+  myPayment = prof && prof.received !== undefined ? { amountReceived: prof.received } : null;
+  renderMyPanel();
 }
 
 /* Tap a handle → open the Venmo app on a prefilled payment screen with the
@@ -848,8 +786,8 @@ async function openVenmo(handle) {
   const owed = mine * (cfg?.pricePerSquare || 0);
   let received = 0;
   try {
-    const s = await getDoc(doc(db, "payments", payDocId(me.email)));
-    if (s.exists()) received = Number(s.data().amountReceived || 0);
+    const prof = await fetchProfile(me.email);
+    received = Number(prof?.received || 0);
   } catch (_) { /* fall back to full owed */ }
   const balance = Math.max(0, owed - received);
   const note = encodeURIComponent(`${me.fullName || ""} — 4th and Cold Squares`.trim());
@@ -1588,6 +1526,11 @@ function renderPayments() {
           paidTo: sel.value === "—" ? "" : sel.value,
           updatedAt: serverTimestamp()
         }, { merge: true });
+        // Mirror onto the profile so the player's own balance display and
+        // Venmo prefill can see it (payments collection stays admin-only)
+        setDoc(doc(db, "profiles", payDocId(r.email)), {
+          email: r.email, received: Number(inp.value || 0), updatedAt: serverTimestamp()
+        }, { merge: true }).catch(() => {});
         audit("payment.update", `${r.fullName} (${r.email}): $${Number(inp.value || 0)} via ${sel.value === "—" ? "unset" : sel.value} — owed $${owed}`);
       } catch (err) { toast(friendlyErr(err)); }
     };

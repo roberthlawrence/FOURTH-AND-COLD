@@ -55,14 +55,10 @@
     <label for="wLastName">Last name</label>
     <input id="wLastName" type="text" autocomplete="family-name" placeholder="Longhorn" />
     <p class="finePrint">Your real name — not your square name. You'll pick square names when you claim.</p>
-    <button id="sendLinkBtn" class="primaryBtn" type="button">Send verification link</button>
-    <p class="finePrint">We'll email you a sign-in link to confirm your address.</p>
-  </div>
-  <div class="fieldStack hidden" id="verifyStep">
-    <h2 class="sectionHead">Check your email</h2>
-    <p class="blurb">A sign-in link was sent to <b id="verifySentTo"></b>. Open it <b>on this device</b> to finish.</p>
-    <button id="resendLinkBtn" class="ghostBtn" type="button">Resend link</button>
-    <button id="changeEmailBtn" class="linkBtn" type="button">Wrong email? Change it</button>
+    <label for="wEmailConfirm">Confirm your email</label>
+    <input id="wEmailConfirm" type="email" autocomplete="off" placeholder="Type your email again" />
+    <p class="finePrint">Type it again to make sure it's right — your squares and winnings follow this address all season.</p>
+    <button id="joinBtn" class="primaryBtn" type="button">Enter the board</button>
   </div>
 </section>
 
