@@ -464,3 +464,8 @@ td.settledNo{color:#A3271C;font-weight:700}
 /* mini buttons in the archives list */
 .miniBtn{padding:6px 10px;font-size:12px}
 #cloudArchivesList{margin-top:10px}
+
+/* badge in the board's corner block */
+#board th.cornerLogo{border:none;background:transparent;vertical-align:bottom;padding:0 4px 4px 0}
+#board th.cornerLogo img{height:64px;width:auto;display:block;margin:0 auto;opacity:.92}
+@media (max-width:480px){#board th.cornerLogo img{height:52px}}

@@ -587,9 +587,15 @@ function renderBoard() {
   const topName = (soccerMode() || mlbMode()) ? "HOME" : "TEXAS";
   const sideName = (soccerMode() || mlbMode()) ? "AWAY" : (g?.opponent || "OPPONENT");
 
-  // Big top-axis team bar (burnt orange)
+  // Big top-axis team bar (burnt orange); corner block carries the badge
   const axisRow = el("tr");
-  const axisCorner = el("th", "corner"); axisCorner.colSpan = 2;
+  const axisCorner = el("th", "corner cornerLogo");
+  axisCorner.colSpan = 2;
+  axisCorner.rowSpan = 2; // spans down beside the digit rail too
+  const cornerImg = document.createElement("img");
+  cornerImg.src = "logo-dark.png";
+  cornerImg.alt = "";
+  axisCorner.appendChild(cornerImg);
   axisRow.appendChild(axisCorner);
   const axisTh = el("th", "axisTop");
   axisTh.colSpan = GRID;
@@ -597,10 +603,8 @@ function renderBoard() {
   axisRow.appendChild(axisTh);
   board.appendChild(axisRow);
 
-  // Digit header row (top digits in orange)
+  // Digit header row (top digits in orange) — corner already spanned above
   const head = el("tr");
-  const headCorner = el("th", "corner"); headCorner.colSpan = 2;
-  head.appendChild(headCorner);
   for (let c = 1; c <= GRID; c++) {
     const th = el("th", "digit colD" + (cols ? "" : " undrawn"), cols ? String(cols[c - 1]) : "?");
     th.dataset.axis = "col"; th.dataset.idx = c - 1;
@@ -1981,7 +1985,19 @@ $("cloudArchivesBtn").onclick = async () => {
       const rBtn = el("button", "dangerBtn miniBtn", "Restore");
       rBtn.type = "button";
       rBtn.onclick = () => confirmAndRestore(a);
-      right.append(jBtn, cBtn, rBtn);
+      const xBtn = el("button", "dangerBtn miniBtn", "✕");
+      xBtn.type = "button";
+      xBtn.title = "Delete this archive permanently";
+      xBtn.onclick = async () => {
+        if (!confirm(`Delete archive "${a.seasonName}" (${(a.exportedAt || "").slice(0, 10)})? This cannot be undone.`)) return;
+        try {
+          await deleteDoc(doc(db, "archives", d.id));
+          audit("archive.delete", `${a.seasonName} (exported ${a.exportedAt || "?"})`);
+          toast("Archive deleted.");
+          $("cloudArchivesBtn").click(); // refresh the list
+        } catch (err) { toast(friendlyErr(err)); }
+      };
+      right.append(jBtn, cBtn, rBtn, xBtn);
       rowEl.appendChild(right);
       list.appendChild(rowEl);
     });
