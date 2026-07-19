@@ -380,6 +380,7 @@ $("continueBtn").onclick = async () => {
     // Known email — straight in, name auto-loaded
     me = { fullName: profileName(prof, email), email };
     saveIdentity(); route();
+    renderBoard(); renderMyPanel(); renderWinnerBanner();
     refreshMyPayment();
     hideLoading();
     toast("Welcome back, " + me.fullName.split(" ")[0] + "!");
@@ -420,6 +421,7 @@ $("joinBtn").onclick = async () => {
     }, { merge: true });
     audit("player.join", pendingEmail);
     route();
+    renderBoard(); renderMyPanel(); renderWinnerBanner();
     refreshMyPayment();
     toast("Welcome to the board, " + first + "! 🤘");
   } catch (err) { toast(friendlyErr(err)); }
@@ -432,6 +434,7 @@ $("switchUserBtn").onclick = async () => {
   me = { fullName: "", email: "" };
   // keep the anonymous session — same device keeps edit rights on its claims
   route();
+  renderBoard(); renderMyPanel(); renderWinnerBanner();
   hideLoading();
 };
 
