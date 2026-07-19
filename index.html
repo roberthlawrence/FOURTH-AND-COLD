@@ -43,6 +43,7 @@
   </div>
   <p id="welcomeBlurb" class="blurb"></p>
   <div class="fieldStack" id="emailStep">
+    <div id="emailStepMsg" class="stepError hidden"></div>
     <label for="wEmail">Email</label>
     <input id="wEmail" type="email" autocomplete="email" placeholder="bevo@utexas.edu" />
     <button id="continueBtn" class="primaryBtn" type="button">Continue</button>
@@ -177,6 +178,7 @@
         <button id="saveEspnIdBtn" class="ghostBtn" type="button">Save</button>
         <button id="findEspnIdBtn" class="ghostBtn" type="button">Auto-find</button>
       </div>
+      <p class="finePrint">Auto-find matches Texas/Rangers games by date. For any other game (playoffs, neutral sites, random teams): open the game on espn.com and copy the number from the URL — it looks like <b>espn.com/college-football/game/_/gameId/<u>401628476</u></b>. Paste that number here and Save.</p>
       <div class="btnRow">
         <button id="pullScoresBtn" class="primaryBtn" type="button">Pull scores &amp; record winners</button>
         <button id="copyAnnounceBtn" class="ghostBtn" type="button">Copy winners announcement</button>

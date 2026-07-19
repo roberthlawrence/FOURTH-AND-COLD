@@ -469,3 +469,18 @@ td.settledNo{color:#A3271C;font-weight:700}
 #board th.cornerLogo{border:none;background:transparent;vertical-align:bottom;padding:0 4px 4px 0}
 #board th.cornerLogo img{height:64px;width:auto;display:block;margin:0 auto;opacity:.92}
 @media (max-width:480px){#board th.cornerLogo img{height:52px}}
+
+
+/* inline signup error */
+.stepError{
+  background:#FBEAE8;border:1.5px solid #A3271C;color:#A3271C;
+  border-radius:8px;padding:10px 14px;font-size:14px;font-weight:600;margin-bottom:6px;
+}
+
+/* multi-win rings: stack a gold ring per win (capped at 4) */
+td.sq.winner{box-shadow:0 0 0 3px var(--gold);position:relative;z-index:2}
+td.sq.winner.win2{box-shadow:0 0 0 3px var(--gold),0 0 0 5px var(--field),0 0 0 7px var(--gold)}
+td.sq.winner.win3{box-shadow:0 0 0 3px var(--gold),0 0 0 5px var(--field),0 0 0 7px var(--gold),0 0 0 9px var(--field),0 0 0 11px var(--gold)}
+td.sq.winner.win4{box-shadow:0 0 0 3px var(--gold),0 0 0 5px var(--field),0 0 0 7px var(--gold),0 0 0 9px var(--field),0 0 0 11px var(--gold),0 0 0 13px var(--field),0 0 0 15px var(--gold)}
+/* unclaimed winning cell: label it */
+td.sq.tgWin{color:var(--orange-deep);font-style:italic;font-weight:700;background:#FFF6E4}

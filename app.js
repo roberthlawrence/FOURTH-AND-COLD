@@ -373,6 +373,7 @@ function profileName(p, email) {
 $("continueBtn").onclick = async () => {
   const email = $("wEmail").value.trim().toLowerCase();
   if (!email || !email.includes("@")) { toast("Enter a valid email."); return; }
+  $("emailStepMsg").classList.add("hidden");
   pendingEmail = email;
   showLoading();
   const prof = await fetchProfile(email);
@@ -401,7 +402,10 @@ $("joinBtn").onclick = async () => {
   if (!first || !last) { toast("Enter your first and last name."); return; }
   if (!pendingEmail) { $("nameStep").classList.add("hidden"); $("emailStep").classList.remove("hidden"); return; }
   if (confirmEmail !== pendingEmail) {
-    toast("Emails didn't match — let's try that again from the top.");
+    toast("Oops — those email addresses didn't match. Please try again.");
+    const msg = $("emailStepMsg");
+    msg.textContent = "Oops — it looks like the email addresses didn't match. Please try again.";
+    msg.classList.remove("hidden");
     $("wEmail").value = ""; $("wEmailConfirm").value = "";
     $("wFirstName").value = ""; $("wLastName").value = "";
     pendingEmail = "";
@@ -581,14 +585,17 @@ function renderBoard() {
   for (let i = 0; i < GRID; i++) cg.appendChild(el("col"));
   board.appendChild(cg);
   $("boardTitle").textContent = g
-    ? ((soccerMode() || mlbMode()) ? (g.opponent || "TBD") : "TEXAS vs " + (g.opponent || "TBD"))
+    ? ((soccerMode() || mlbMode() || /\bvs\.?\b|@/i.test(g.opponent || "")) ? (g.opponent || "TBD") : "TEXAS vs " + (g.opponent || "TBD"))
     : "Board";
   $("boardStatus").textContent = cfg?.boardLocked ? "Board locked" : "Board open — tap a square";
 
   const cols = g?.texasDigits || null;   // TEXAS/home digits across the top
   const rows = g?.oppDigits || null;     // OPPONENT/away digits down the side
-  const topName = (soccerMode() || mlbMode()) ? "HOME" : "TEXAS";
-  const sideName = (soccerMode() || mlbMode()) ? "AWAY" : (g?.opponent || "OPPONENT");
+  // If the opponent field reads like a full matchup ("OSU vs Oregon",
+  // "MIA @ ALA"), this isn't a Texas game — label the axes HOME/AWAY
+  const neutral = /\bvs\.?\b|@/i.test(g?.opponent || "");
+  const topName = (soccerMode() || mlbMode() || neutral) ? "HOME" : "TEXAS";
+  const sideName = (soccerMode() || mlbMode()) ? "AWAY" : (neutral ? "AWAY" : (g?.opponent || "OPPONENT"));
 
   // Big top-axis team bar (burnt orange); corner block carries the badge
   const axisRow = el("tr");
@@ -616,7 +623,7 @@ function renderBoard() {
   board.appendChild(head);
 
   const winKey = liveWinningKey();
-  const recordedWins = winnerKeysForGame(g);
+  const winCounts = winnerCountsForGame(g);
 
   for (let r = 1; r <= GRID; r++) {
     const tr = el("tr");
@@ -644,7 +651,12 @@ function renderBoard() {
       } else {
         td.classList.add("open");
       }
-      if (recordedWins.has(key)) td.classList.add("winner");
+      const wins = winCounts.get(key) || 0;
+      if (wins) {
+        td.classList.add("winner");
+        if (wins > 1) td.classList.add("win" + Math.min(wins, 4));
+        if (!sq) { td.classList.add("tgWin"); td.textContent = "tailgate"; }
+      }
       if (winKey === key) td.classList.add("liveLead");
       td.tabIndex = 0;
       td.setAttribute("role", "button");
@@ -829,13 +841,14 @@ function renderVenmo() {
 }
 
 /* ---------------- winners ledger ---------------- */
-function winnerKeysForGame(g) {
-  const set = new Set();
-  if (!g?.winners) return set;
-  // Only claimed wins get the gold ring — an empty-square (tailgate) win
-  // shouldn't crown whoever claims that cell later
-  Object.values(g.winners).forEach(w => { if (w?.key && !w.empty) set.add(w.key); });
-  return set;
+/* key -> number of wins this game (tailgate wins count — the CELL won) */
+function winnerCountsForGame(g) {
+  const counts = new Map();
+  if (!g?.winners) return counts;
+  Object.values(g.winners).forEach(w => {
+    if (w?.key) counts.set(w.key, (counts.get(w.key) || 0) + 1);
+  });
+  return counts;
 }
 const payoutId = (gameId, q) => `${gameId}_q${q}`;
 
@@ -1056,7 +1069,10 @@ function pickCompetitors(comp) {
     texas = comp.competitors.find(c => c.homeAway === "home");
     opp = comp.competitors.find(c => c.homeAway === "away");
   } else {
-    texas = comp.competitors.find(c => c.id === TEXAS_TEAM_ID || c.team?.id === TEXAS_TEAM_ID);
+    // Texas rides the top axis when they're in the game; for any other
+    // matchup (playoffs, neutral sites) the HOME team takes the top axis
+    texas = comp.competitors.find(c => c.id === TEXAS_TEAM_ID || c.team?.id === TEXAS_TEAM_ID)
+      || comp.competitors.find(c => c.homeAway === "home");
     opp = comp.competitors.find(c => c !== texas);
   }
   return { texas, opp };
@@ -1182,9 +1198,7 @@ async function pullLive() {
       oppLines: (opp.linescores || []).map(l => Number(l.displayValue ?? l.value ?? 0)),
       period: status?.period || 0,
       clock: status?.type?.shortDetail || status?.displayClock || "",
-      texAbbrev: (soccerMode() || mlbMode())
-        ? (texas.team?.abbreviation || "HOME")
-        : "TEXAS",
+      texAbbrev: texas.team?.abbreviation || ((soccerMode() || mlbMode()) ? "HOME" : "TEXAS"),
       oppAbbrev: opp.team?.abbreviation || (g.opponent || "OPP").slice(0, 4).toUpperCase()
     };
     renderScoreStrip(g);
@@ -2200,6 +2214,13 @@ $("auditDownloadBtn").onclick = async () => {
 /* ---------------- kick off ---------------- */
 startListeners();
 setTimeout(() => hideLoading(), 6000); // safety net if the network is down
-completeEmailLinkIfPresent();
 setTimeout(() => { refreshIdentityFromProfile(); refreshMyPayment(); }, 1500);
 setTimeout(() => maybeStartLivePoll(), 2500);
+/* Desktop browsers suspend timers in background tabs — when the tab wakes,
+   pull fresh scores immediately instead of showing a frozen inning */
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    maybeStartLivePoll();
+    if (liveTimer) pullLive();
+  }
+});
