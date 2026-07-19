@@ -11,6 +11,14 @@
 </head>
 <body>
 
+<div id="loadScreen" class="show" role="status" aria-label="Loading">
+  <div id="loadLogoWrap">
+    <img class="loadGhost" src="logo-dark.png" alt="" />
+    <img class="loadFill" src="logo-dark.png" alt="" />
+  </div>
+  <span id="loadText">LOADING</span>
+</div>
+
 <div id="bgWatermark" aria-hidden="true"></div>
 
 <header id="topBar">
@@ -116,8 +124,8 @@
     <div id="winnersList"></div>
   </section>
 
-  <!-- Pot tracker -->
-  <section id="potPanel" class="panel">
+  <!-- Pot tracker (admins only) -->
+  <section id="potPanel" class="panel hidden">
     <h2 class="sectionHead">The pot</h2>
     <div id="potBars"></div>
   </section>

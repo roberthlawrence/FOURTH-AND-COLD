@@ -87,9 +87,15 @@ service cloud.firestore {
       allow write: if isPowerAdmin();
     }
 
-    // ---- payments: private. Power OR payment admins.
+    // ---- payments: writes are admin-only. Reads: admins see all; a verified
+    // player may read exactly their own record (drives their balance display
+    // and the pre-filled Venmo amount).
     match /payments/{payId} {
-      allow read, write: if isAnyAdmin();
+      allow read: if isAnyAdmin()
+        || (request.auth != null
+            && 'email' in request.auth.token
+            && request.auth.token.email.lower() == resource.data.email);
+      allow write: if isAnyAdmin();
     }
 
     // ---- payout confirmations: public read (winners see their status);

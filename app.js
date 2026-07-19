@@ -134,6 +134,20 @@ function toast(msg) {
 const money = (n) => "$" + Number(n || 0).toLocaleString();
 const digitsOf = (n) => Math.abs(Number(n) || 0) % 10;
 
+/* ---------------- branded loading screen ----------------
+   Shown on load and on every screen transition — minimum display time keeps
+   the logo-fill animation from flickering on fast operations. */
+const LOAD_MIN_MS = 750;
+let loadShownAt = 0;
+function showLoading() {
+  loadShownAt = Date.now();
+  $("loadScreen").classList.add("show");
+}
+function hideLoading() {
+  const wait = Math.max(0, LOAD_MIN_MS - (Date.now() - loadShownAt));
+  setTimeout(() => $("loadScreen").classList.remove("show"), wait);
+}
+
 /* ---------------- identity ---------------- */
 function loadIdentity() {
   try {
@@ -182,6 +196,7 @@ function isVerifiedPlayer() {
 /* Complete a verification link if the page was opened from one */
 async function completeEmailLinkIfPresent() {
   if (!isSignInWithEmailLink(auth, location.href)) return;
+  showLoading();
   let pending = {};
   try { pending = JSON.parse(localStorage.getItem("fc_pending") || "{}"); } catch (_) {}
   let email = pending.email;
@@ -208,9 +223,11 @@ async function completeEmailLinkIfPresent() {
     history.replaceState(null, "", location.pathname);
     toast("Email verified — welcome to the board! 🤘");
     route();
+    refreshMyPayment();
   } catch (err) {
     toast("Verification failed: " + (err.message || err) + " — tap Resend for a fresh link.");
   }
+  hideLoading();
 }
 
 function route() {
@@ -227,6 +244,7 @@ function startListeners() {
   unsubCfg = onSnapshot(doc(db, "config", "current"), (snap) => {
     cfg = snap.exists() ? snap.data() : null;
     onConfig();
+    hideLoading(); // boot loader ends once live data arrives
   });
   unsubSquares = onSnapshot(collection(db, "squares"), (qs) => {
     squares.clear();
@@ -307,6 +325,8 @@ function onConfig() {
   // Admin tools stay tucked away until requested — the toggle lives at the bottom
   $("adminToolsBar").classList.toggle("hidden", !admin);
   $("adminPanel").classList.toggle("hidden", !(admin && adminToolsOpen));
+  // Pot/financials are admin eyes only (both tiers), visible without opening tools
+  $("potPanel").classList.toggle("hidden", !admin);
   if (adminEmail) $("adminLoginBtn").textContent = "Sign out";
   if (admin) {
     $("adminWho").textContent = adminEmail;
@@ -392,18 +412,22 @@ async function fetchProfile(email) {
   } catch (_) { return null; }
 }
 function profileName(p, email) {
-  return (((p?.firstName || "") + " " + (p?.lastName || "")).trim()) || email.split("@")[0];
+  const n = (((p?.firstName || "") + " " + (p?.lastName || "")).trim());
+  return n || email.split("@")[0]; // prefix only as a last resort; profile sync repairs it
 }
 $("continueBtn").onclick = async () => {
   const email = $("wEmail").value.trim().toLowerCase();
   if (!email || !email.includes("@")) { toast("Enter a valid email."); return; }
   pendingEmail = email;
+  showLoading();
   // Already signed in as this email on this device? Straight in.
   const u = auth.currentUser;
   if (u && !u.isAnonymous && (u.email || "").toLowerCase() === email) {
     const prof = await fetchProfile(email);
     me = { fullName: profileName(prof, email), email };
     saveIdentity(); route();
+    refreshMyPayment();
+    hideLoading();
     toast("Welcome back, " + me.fullName.split(" ")[0] + "!");
     return;
   }
@@ -419,6 +443,7 @@ $("continueBtn").onclick = async () => {
     $("nameStep").classList.remove("hidden");
     setTimeout(() => $("wFirstName").focus(), 50);
   }
+  hideLoading();
 };
 async function sendVerifyLink(first, last, email) {
   localStorage.setItem("fc_pending", JSON.stringify({ first, last, email }));
@@ -436,6 +461,7 @@ $("sendLinkBtn").onclick = async () => {
   const last = $("wLastName").value.trim();
   if (!first || !last) { toast("Enter your first and last name."); return; }
   if (!pendingEmail) { $("nameStep").classList.add("hidden"); $("emailStep").classList.remove("hidden"); return; }
+  showLoading();
   try {
     await sendVerifyLink(first, last, pendingEmail);
     toast("Verification link sent — check your email (and spam folder).");
@@ -443,15 +469,18 @@ $("sendLinkBtn").onclick = async () => {
     toast("Couldn't send link: " + (err.message || err) +
       " (Admin: is 'Email link' sign-in enabled in Firebase Authentication?)");
   }
+  hideLoading();
 };
 $("resendLinkBtn").onclick = async () => {
   let pending = {};
   try { pending = JSON.parse(localStorage.getItem("fc_pending") || "{}"); } catch (_) {}
   if (!pending.email) { $("verifyStep").classList.add("hidden"); $("emailStep").classList.remove("hidden"); return; }
+  showLoading();
   try {
     await sendVerifyLink(pending.first || "", pending.last || "", pending.email);
     toast("Link re-sent.");
   } catch (err) { toast("Couldn't resend: " + (err.message || err)); }
+  hideLoading();
 };
 $("changeEmailBtn").onclick = () => {
   $("verifyStep").classList.add("hidden");
@@ -459,11 +488,13 @@ $("changeEmailBtn").onclick = () => {
   $("emailStep").classList.remove("hidden");
 };
 $("switchUserBtn").onclick = async () => {
+  showLoading();
   localStorage.removeItem("fc_name"); localStorage.removeItem("fc_email");
   localStorage.removeItem("fc_pending");
   me = { fullName: "", email: "" };
   try { if (auth.currentUser && !adminEmail) await signOut(auth); } catch (_) {}
   route();
+  hideLoading();
 };
 
 /* ---------------- admin sign in ---------------- */
@@ -783,23 +814,46 @@ function renderMyPanel() {
     });
   }
   const owed = mine.length * (cfg?.pricePerSquare || 0);
-  const pay = payments.get(payDocId(me.email));
+  const pay = payments.get(payDocId(me.email)) || myPayment;
+  const received = Number(pay?.amountReceived || 0);
   const bal = $("myBalance");
-  if (pay && Number(pay.amountReceived) >= owed && owed > 0) {
+  if (received >= owed && owed > 0) {
     bal.innerHTML = `${mine.length} square${mine.length === 1 ? "" : "s"} · ${money(owed)} — <span class="settled">PAID ✓</span>`;
   } else if (mine.length) {
-    bal.innerHTML = `${mine.length} square${mine.length === 1 ? "" : "s"} · <span class="due">${money(owed)} due</span>`;
+    const due = owed - received;
+    bal.innerHTML = `${mine.length} square${mine.length === 1 ? "" : "s"} · ` +
+      (received > 0 ? `${money(received)} received · ` : "") +
+      `<span class="due">${money(due)} due</span>`;
   } else bal.textContent = "";
 }
 
-/* Tap a handle → open the Venmo app on a prefilled payment screen
-   (recipient, their balance due, and the required note). Falls back to the
-   venmo.com profile page if the app doesn't take the handoff. */
-function openVenmo(handle) {
+/* Player's own payment record (readable per rules) — drives balance display
+   and the Venmo prefill. Admin-logged payments reduce what the link asks for. */
+let myPayment = null;
+async function refreshMyPayment() {
+  if (!me.email) { myPayment = null; return; }
+  try {
+    const s = await getDoc(doc(db, "payments", payDocId(me.email)));
+    myPayment = s.exists() ? s.data() : null;
+    renderMyPanel();
+  } catch (_) { /* not signed in yet or no record — full amount applies */ }
+}
+
+/* Tap a handle → open the Venmo app on a prefilled payment screen with the
+   CURRENT BALANCE DUE (owed minus whatever the collectors have logged).
+   If payments haven't been logged yet, it prefills the full amount — the
+   collection team keeping the ledger current is what sharpens this. */
+async function openVenmo(handle) {
   const mine = [...squares.values()].filter(s => s.email === me.email).length;
   const owed = mine * (cfg?.pricePerSquare || 0);
+  let received = 0;
+  try {
+    const s = await getDoc(doc(db, "payments", payDocId(me.email)));
+    if (s.exists()) received = Number(s.data().amountReceived || 0);
+  } catch (_) { /* fall back to full owed */ }
+  const balance = Math.max(0, owed - received);
   const note = encodeURIComponent(`${me.fullName || ""} — 4th and Cold Squares`.trim());
-  const amountPart = owed > 0 ? `&amount=${owed}` : "";
+  const amountPart = balance > 0 ? `&amount=${balance}` : "";
   const deepLink = `venmo://paycharge?txn=pay&recipients=${encodeURIComponent(handle)}${amountPart}&note=${note}`;
   const webFallback = `https://venmo.com/u/${encodeURIComponent(handle)}`;
   // If the app opens, this page backgrounds and the fallback timer is cancelled
@@ -1885,6 +1939,7 @@ $("auditDownloadBtn").onclick = async () => {
 
 /* ---------------- kick off ---------------- */
 startListeners();
+setTimeout(() => hideLoading(), 6000); // safety net if the network is down
 completeEmailLinkIfPresent();
-setTimeout(() => refreshIdentityFromProfile(), 1500);
+setTimeout(() => { refreshIdentityFromProfile(); refreshMyPayment(); }, 1500);
 setTimeout(() => maybeStartLivePoll(), 2500);
