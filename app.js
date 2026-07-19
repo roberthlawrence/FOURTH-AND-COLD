@@ -12,7 +12,7 @@ import {
 import {
   getFirestore, doc, collection, onSnapshot, getDoc, getDocs,
   setDoc, updateDoc, deleteDoc, addDoc, serverTimestamp, writeBatch,
-  query, orderBy, limit
+  query, orderBy, limit, startAfter
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -1398,8 +1398,9 @@ $("saveSeasonBtn").onclick = async () => {
     return handle ? { handle: handle.replace(/^@/, ""), note: note || "" } : null;
   }).filter(Boolean);
   const gameCount = Number($("cfgGameCount").value || 6);
+  const chosenSport = $("cfgSport").value;
   const cfgData = {
-    sportMode: $("cfgSport").value === "soccer" ? "soccer" : "cfb",
+    sportMode: ["soccer", "mlb"].includes(chosenSport) ? chosenSport : "cfb",
     seasonName: $("cfgSeasonName").value.trim() || "Squares",
     pricePerSquare: Number($("cfgPrice").value || 0),
     payoutPerWin: Number($("cfgPayout").value || 0),
@@ -1455,34 +1456,90 @@ $("clearBoardBtn").onclick = async () => {
 };
 
 /* ---------------- ADMIN: audit log viewer ---------------- */
-$("auditRefreshBtn").onclick = async () => {
+const AUDIT_PAGE = 75;
+let auditCursor = null; // last doc of the previous page, for pagination
+
+function auditTime(a) {
+  const when = a.ts?.toDate ? a.ts.toDate() : null;
+  if (!when) return "—";
+  return `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, "0")}-${String(when.getDate()).padStart(2, "0")} ` +
+    `${when.getHours()}:${String(when.getMinutes()).padStart(2, "0")}`;
+}
+function appendAuditRows(snap) {
   const list = $("auditList");
-  list.innerHTML = "";
-  list.appendChild(el("div", "emptyNote", "Loading…"));
+  snap.forEach(d => {
+    const a = d.data();
+    const row = el("div", "auditRow");
+    row.appendChild(el("span", "aTime", auditTime(a)));
+    const body = el("div");
+    const line1 = el("div");
+    line1.appendChild(el("span", "aAction", a.action + " "));
+    line1.appendChild(el("span", "aActor", `${a.actorName ? a.actorName + " · " : ""}${a.actor} (${a.role})`));
+    body.appendChild(line1);
+    if (a.details) body.appendChild(el("div", "aDetails", a.details));
+    row.appendChild(body);
+    list.appendChild(row);
+  });
+}
+async function loadAuditPage(reset) {
+  const list = $("auditList");
+  if (reset) { list.innerHTML = ""; auditCursor = null; }
   try {
-    const snap = await getDocs(query(collection(db, "audit"), orderBy("ts", "desc"), limit(75)));
-    list.innerHTML = "";
-    if (snap.empty) { list.appendChild(el("div", "emptyNote", "No activity recorded yet.")); return; }
-    snap.forEach(d => {
-      const a = d.data();
-      const row = el("div", "auditRow");
-      const when = a.ts?.toDate ? a.ts.toDate() : null;
-      row.appendChild(el("span", "aTime", when
-        ? `${when.getMonth() + 1}/${when.getDate()} ${when.getHours()}:${String(when.getMinutes()).padStart(2, "0")}`
-        : "—"));
-      const body = el("div");
-      const line1 = el("div");
-      line1.appendChild(el("span", "aAction", a.action + " "));
-      line1.appendChild(el("span", "aActor", `${a.actorName ? a.actorName + " · " : ""}${a.actor} (${a.role})`));
-      body.appendChild(line1);
-      if (a.details) body.appendChild(el("div", "aDetails", a.details));
-      row.appendChild(body);
-      list.appendChild(row);
-    });
+    const parts = [collection(db, "audit"), orderBy("ts", "desc")];
+    const qy = auditCursor
+      ? query(parts[0], parts[1], startAfter(auditCursor), limit(AUDIT_PAGE))
+      : query(parts[0], parts[1], limit(AUDIT_PAGE));
+    const snap = await getDocs(qy);
+    if (reset && snap.empty) {
+      list.appendChild(el("div", "emptyNote", "No activity recorded yet."));
+      $("auditMoreBtn").classList.add("hidden");
+      return;
+    }
+    appendAuditRows(snap);
+    auditCursor = snap.docs[snap.docs.length - 1] || auditCursor;
+    // More pages likely if we got a full page back
+    $("auditMoreBtn").classList.toggle("hidden", snap.size < AUDIT_PAGE);
+    if (!reset && snap.empty) toast("That's the whole log.");
   } catch (err) {
-    list.innerHTML = "";
     list.appendChild(el("div", "emptyNote", "Couldn't load audit log: " + (err.message || err)));
   }
+}
+$("auditRefreshBtn").onclick = () => loadAuditPage(true);
+$("auditMoreBtn").onclick = () => loadAuditPage(false);
+
+/* Download the complete log as a text file (paged fetch, oldest last) */
+$("auditDownloadBtn").onclick = async () => {
+  toast("Building full log…");
+  try {
+    const lines = [];
+    let cursor = null, fetched = 0;
+    while (true) {
+      const qy = cursor
+        ? query(collection(db, "audit"), orderBy("ts", "desc"), startAfter(cursor), limit(500))
+        : query(collection(db, "audit"), orderBy("ts", "desc"), limit(500));
+      const snap = await getDocs(qy);
+      if (snap.empty) break;
+      snap.forEach(d => {
+        const a = d.data();
+        lines.push(`${auditTime(a)} | ${a.action} | ${a.actorName ? a.actorName + " " : ""}<${a.actor}> (${a.role})${a.details ? " | " + a.details : ""}`);
+      });
+      fetched += snap.size;
+      cursor = snap.docs[snap.docs.length - 1];
+      if (snap.size < 500 || fetched > 20000) break; // sanity ceiling
+    }
+    if (!lines.length) { toast("Log is empty."); return; }
+    const header = `4TH & COLD SQUARES — FULL AUDIT LOG\nGenerated ${new Date().toLocaleString()} · ${lines.length} entries (newest first)\n${"=".repeat(60)}\n`;
+    const blob = new Blob([header + lines.join("\n") + "\n"], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const d = new Date();
+    a.download = `fourth-and-cold-audit-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast(`Downloaded ${lines.length} audit entries.`);
+  } catch (err) { toast("Download failed: " + (err.message || err)); }
 };
 
 /* ---------------- kick off live polling on load ---------------- */
