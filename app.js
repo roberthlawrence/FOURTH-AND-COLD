@@ -2115,6 +2115,9 @@ $("clearBoardBtn").onclick = async () => {
     (await getDocs(collection(db, "squares"))).forEach(d => batch.delete(d.ref));
     (await getDocs(collection(db, "payments"))).forEach(d => batch.delete(d.ref));
     (await getDocs(collection(db, "payouts"))).forEach(d => batch.delete(d.ref));
+    // Profiles persist across seasons (names, identity) — but the mirrored
+    // payment total must reset with the season or old money haunts new boards
+    (await getDocs(collection(db, "profiles"))).forEach(d => batch.update(d.ref, { received: 0 }));
     games.forEach(g => batch.update(doc(db, "games", g.id), { texasDigits: null, oppDigits: null, numbersLocked: false, winners: {}, finalScore: null }));
     batch.update(doc(db, "config", "current"), { boardLocked: false });
     await batch.commit();
