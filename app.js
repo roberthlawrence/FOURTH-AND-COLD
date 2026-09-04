@@ -302,6 +302,7 @@ function onConfig() {
         payments.clear();
         qs.forEach(d => payments.set(d.id, d.data()));
         renderPayments(); renderPot(); renderMyPanel();
+        reconcilePaymentMirrors();
       });
     }
     if (!unsubProfiles) {
@@ -309,10 +310,38 @@ function onConfig() {
         profiles.clear();
         qs.forEach(d => profiles.set(d.id, d.data()));
         renderPayments();
+        reconcilePaymentMirrors();
       });
     }
   }
-  renderBoard(); renderMyPanel(); renderPot(); renderVenmo();
+  renderBoard(); renderMyPanel(); renderPot(); renderVenmo(); renderJukebox();
+}
+
+/* Official SoundCloud embed — the song streams from SoundCloud (their
+   licensing, their player); we just point at the track from season config */
+let jukeboxUrl = null;
+function renderJukebox() {
+  const box = $("jukebox");
+  const url = (cfg?.soundcloudUrl || "").trim();
+  if (!url || !/^https:\/\/(on\.)?soundcloud\.com\//i.test(url)) {
+    box.classList.add("hidden");
+    $("jukeboxPlayer").innerHTML = "";
+    jukeboxUrl = null;
+    return;
+  }
+  box.classList.remove("hidden");
+  if (jukeboxUrl === url) return; // don't rebuild (and stop playback) on re-renders
+  jukeboxUrl = url;
+  const iframe = document.createElement("iframe");
+  iframe.width = "100%";
+  iframe.height = "120";
+  iframe.frameBorder = "0";
+  iframe.allow = "autoplay";
+  iframe.title = "Tailgate anthem — SoundCloud player";
+  iframe.src = "https://w.soundcloud.com/player/?url=" + encodeURIComponent(url) +
+    "&color=%23bf5700&auto_play=false&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=false";
+  $("jukeboxPlayer").innerHTML = "";
+  $("jukeboxPlayer").appendChild(iframe);
 }
 
 /* ---------------- welcome / identity flow (email-first) ----------------
@@ -1491,6 +1520,27 @@ function paymentRollup() {
   });
   return [...byEmail.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
+/* Self-healing: whenever an admin session sees the ledger and the profile
+   mirrors disagree (e.g. payments logged before the mirror existed, or a
+   write that failed), quietly sync the mirrors so players see correct
+   balances. Converges: writes only happen on drift. */
+let reconcileTimer = null;
+function reconcilePaymentMirrors() {
+  if (!isAdmin() || !payments.size) return;
+  clearTimeout(reconcileTimer);
+  reconcileTimer = setTimeout(() => {
+    payments.forEach((pay, id) => {
+      const amount = Number(pay.amountReceived || 0);
+      const prof = profiles.get(id);
+      if (!prof || Number(prof.received || 0) !== amount) {
+        setDoc(doc(db, "profiles", id), {
+          email: pay.email, received: amount, updatedAt: serverTimestamp()
+        }, { merge: true }).catch(() => {});
+      }
+    });
+  }, 800);
+}
+
 let payRenderDeferred = false;
 $("payTableWrap").addEventListener("focusout", () => {
   // wait a tick so focus can settle on the next field (tabbing between inputs)
@@ -1683,6 +1733,7 @@ function fillSeasonForm() {
   $("cfgAdmins").value = (cfg.adminEmails || []).join(", ");
   $("cfgPayAdmins").value = (cfg.paymentAdminEmails || []).join(", ");
   $("cfgVenmo").value = (cfg.venmo || []).map(v => v.handle + " | " + (v.note || "")).join("\n");
+  $("cfgSoundcloud").value = cfg.soundcloudUrl || "";
   $("cfgBlurb").value = cfg.blurb || "";
   $("cfgGameCount").value = String(games.length || cfg.gameCount || 6);
   renderCfgGames(games);
@@ -1796,6 +1847,7 @@ $("saveSeasonBtn").onclick = async () => {
     paymentAdminEmails: payAdminList,
     gameCount,
     venmo,
+    soundcloudUrl: $("cfgSoundcloud").value.trim(),
     blurb: $("cfgBlurb").value,
     boardLocked: cfg?.boardLocked || false
   };
@@ -1847,13 +1899,13 @@ async function buildSeasonArchive() {
       const qy = cursor
         ? query(collection(db, "audit"), orderBy("ts", "desc"), startAfter(cursor), limit(500))
         : query(collection(db, "audit"), orderBy("ts", "desc"), limit(500));
-      const snap = await getDocs(qy);
+      const snap = await withTimeout(getDocs(qy), 8000);
       if (snap.empty) break;
       snap.forEach(d => auditRows.push(d.data()));
       cursor = snap.docs[snap.docs.length - 1];
       if (snap.size < 500) break;
     }
-  } catch (_) { /* audit optional in archive */ }
+  } catch (_) { /* audit optional in archive — a stall won't block the export */ }
   return {
     archiveVersion: 1,
     app: "4th-and-cold-squares",
@@ -1869,16 +1921,41 @@ async function buildSeasonArchive() {
     audit: auditRows
   };
 }
+/* Reliable file delivery: a modal with a real Download link (and Share on
+   phones). Programmatic a.click() after async work silently fails on iOS
+   Safari — an explicit user tap always works. Resolves when closed. */
+function deliverFile(filename, text, mime) {
+  return new Promise((resolve) => {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const overlay = $("fileModalOverlay");
+    const dl = $("fileDownloadBtn");
+    dl.href = url;
+    dl.setAttribute("download", filename);
+    $("fileModalName").textContent = filename;
+    const shareBtn = $("fileShareBtn");
+    const file = new File([blob], filename, { type: mime });
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+    shareBtn.classList.toggle("hidden", !canShare);
+    shareBtn.onclick = () => navigator.share({ files: [file] }).catch(() => {});
+    const close = () => {
+      overlay.classList.remove("show");
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      resolve();
+    };
+    $("fileCloseBtn").onclick = close;
+    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    overlay.classList.add("show");
+  });
+}
+const withTimeout = (p, ms) => Promise.race([
+  p, new Promise((_, rej) => setTimeout(() => rej(new Error("timed out")), ms))
+]);
+
 function downloadArchive(archive) {
-  const blob = new Blob([JSON.stringify(archive, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  const slug = (archive.seasonName || "season").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  a.download = `4th-and-cold-archive-${slug}-${tsFileStamp()}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  const slug = archiveSlug(archive);
+  return deliverFile(`4th-and-cold-archive-${slug}-${tsFileStamp()}.json`,
+    JSON.stringify(archive, null, 2), "application/json");
 }
 /* Human-readable CSV: boards per game, winners, payments in & out */
 function csvEscape(v) {
@@ -1942,12 +2019,7 @@ function buildCsv(archive) {
   return L.join("\n");
 }
 function downloadCsv(name, csv) {
-  const blob = new Blob([csv], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return deliverFile(name, csv, "text/csv");
 }
 function archiveSlug(archive) {
   return (archive.seasonName || "season").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -1967,12 +2039,12 @@ $("archiveBtn").onclick = async () => {
   showLoading();
   try {
     const archive = await buildSeasonArchive();
-    downloadArchive(archive);
     await storeArchiveToCloud(archive);
     audit("season.archive", `${archive.seasonName} — ${Object.keys(archive.squares).length} squares, ${Object.keys(archive.payments).length} payment records — downloaded + saved to cloud`);
-    toast("Archive downloaded and saved to the cloud.");
-  } catch (err) { toast("Archive failed: " + (err.message || err)); }
-  hideLoading();
+    hideLoading();
+    await downloadArchive(archive);
+    toast("Archive saved to the cloud too.");
+  } catch (err) { hideLoading(); toast("Archive failed: " + (err.message || err)); }
 };
 
 /* Live CSV: current state right now — unlike archive CSVs, which are
@@ -1981,10 +2053,9 @@ $("csvNowBtn").onclick = async () => {
   showLoading();
   try {
     const archive = await buildSeasonArchive();
-    downloadCsv(`4th-and-cold-${archiveSlug(archive)}-current-${tsFileStamp()}.csv`, buildCsv(archive));
-    toast("Current CSV downloaded.");
-  } catch (err) { toast("CSV failed: " + (err.message || err)); }
-  hideLoading();
+    hideLoading();
+    await downloadCsv(`4th-and-cold-${archiveSlug(archive)}-current-${tsFileStamp()}.csv`, buildCsv(archive));
+  } catch (err) { hideLoading(); toast("CSV failed: " + (err.message || err)); }
 };
 
 /* Browse cloud archives: download JSON/CSV or restore any past season */
@@ -2100,11 +2171,11 @@ $("clearBoardBtn").onclick = async () => {
   let archived = false;
   try {
     const archive = await buildSeasonArchive();
-    downloadArchive(archive);
     await storeArchiveToCloud(archive).catch(() => {}); // cloud copy is best-effort
+    hideLoading();
+    await downloadArchive(archive); // modal — resolves when they close it
     archived = true;
-  } catch (_) { /* fall through to the confirm below */ }
-  hideLoading();
+  } catch (_) { hideLoading(); /* fall through to the confirm below */ }
   if (!archived) {
     if (!confirm("Couldn't build the archive download. Wipe WITHOUT a backup?")) return;
   } else {
@@ -2201,16 +2272,7 @@ $("auditDownloadBtn").onclick = async () => {
     }
     if (!lines.length) { toast("Log is empty."); return; }
     const header = `4TH & COLD SQUARES — FULL AUDIT LOG\nGenerated ${new Date().toLocaleString()} · ${lines.length} entries (newest first)\n${"=".repeat(60)}\n`;
-    const blob = new Blob([header + lines.join("\n") + "\n"], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    const d = new Date();
-    a.download = `fourth-and-cold-audit-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    toast(`Downloaded ${lines.length} audit entries.`);
+    await deliverFile(`fourth-and-cold-audit-${tsFileStamp()}.txt`, header + lines.join("\n") + "\n", "text/plain");
   } catch (err) { toast("Download failed: " + (err.message || err)); }
 };
 
@@ -2225,5 +2287,6 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     maybeStartLivePoll();
     if (liveTimer) pullLive();
+    refreshMyPayment();
   }
 });

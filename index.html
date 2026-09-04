@@ -224,6 +224,8 @@
         <input id="cfgPayAdmins" type="text" />
         <label for="cfgVenmo">Venmo lines (one per line: handle | note)</label>
         <textarea id="cfgVenmo" rows="3"></textarea>
+        <label for="cfgSoundcloud">SoundCloud track URL (optional — shows a player on the site)</label>
+        <input id="cfgSoundcloud" type="text" placeholder="https://soundcloud.com/artist/track" />
         <label for="cfgBlurb">Welcome blurb</label>
         <textarea id="cfgBlurb" rows="3"></textarea>
         <label for="cfgGameCount">Number of games</label>
@@ -250,6 +252,11 @@
     </div>
   </section>
 
+  <section id="jukebox" class="panel hidden">
+    <h2 class="sectionHead">Tailgate anthem</h2>
+    <div id="jukeboxPlayer"></div>
+  </section>
+
   <div id="adminToolsBar" class="hidden">
     <button id="adminToolsBtn" class="ghostBtn" type="button">Show admin tools</button>
   </div>
@@ -271,6 +278,18 @@
       <button id="modalReleaseBtn" class="dangerBtn hidden" type="button">Release square</button>
       <button id="modalCancelBtn" class="ghostBtn" type="button">Cancel</button>
       <button id="modalSaveBtn" class="primaryBtn" type="button">Claim</button>
+    </div>
+  </div>
+</div>
+
+<div id="fileModalOverlay" role="dialog" aria-modal="true" aria-labelledby="fileModalTitle">
+  <div id="modalFile">
+    <h2 id="fileModalTitle">File ready</h2>
+    <p id="fileModalName" class="finePrint"></p>
+    <div id="fileModalBtns">
+      <button id="fileShareBtn" class="ghostBtn hidden" type="button">Share</button>
+      <a id="fileDownloadBtn" class="primaryBtn" download>Download</a>
+      <button id="fileCloseBtn" class="ghostBtn" type="button">Close</button>
     </div>
   </div>
 </div>
