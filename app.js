@@ -215,6 +215,7 @@ function startListeners() {
     if (!activeGameId && games.length) activeGameId = defaultGame().id;
     renderTabs(); renderBoard(); renderWinners(); renderAdminGame(); renderPot(); renderWinnerBanner();
     if (isAdmin()) renderPayoutsList();
+    scheduleCatchUp();
   });
   unsubPayouts = onSnapshot(collection(db, "payouts"), (qs) => {
     payouts.clear();
@@ -315,6 +316,7 @@ function onConfig() {
     }
   }
   renderBoard(); renderMyPanel(); renderPot(); renderVenmo(); renderJukebox();
+  scheduleCatchUp();
 }
 
 /* Official SoundCloud embed — the song streams from SoundCloud (their
@@ -558,6 +560,7 @@ function renderPeriodStrip(g) {
   strip.innerHTML = "";
   if (!g) return;
   let anyContent = false;
+  const computed = displayPeriodResults(g);
   for (let q = 1; q <= numPeriods(); q++) {
     const w = g.winners?.["q" + q];
     const chip = el("div", "perChip");
@@ -581,19 +584,34 @@ function renderPeriodStrip(g) {
       chip.appendChild(el("span", "pcScore", `${liveState.texasScore}–${liveState.oppScore}`));
       chip.appendChild(el("span", "pcWho empty", "live"));
     } else {
-      chip.appendChild(el("span", "pcScore", "–"));
-      chip.appendChild(el("span", "pcWho empty", ""));
+      // Finished period not yet officially recorded — show the computed result
+      const dr = computed.find(r => r.q === q);
+      if (dr) {
+        anyContent = true;
+        chip.classList.add("hasWin");
+        chip.appendChild(el("span", "pcScore", `${dr.t}–${dr.o}`));
+        chip.appendChild(el("span", dr.empty ? "pcWho empty" : "pcWho", dr.empty ? "→ tailgate" : dr.squareName));
+        if (!dr.empty && me.email && dr.email === me.email) { chip.classList.add("myWin"); chip.title = "You won this one!"; }
+      } else {
+        chip.appendChild(el("span", "pcScore", "–"));
+        chip.appendChild(el("span", "pcWho empty", ""));
+      }
     }
     strip.appendChild(chip);
   }
   // Informational FINAL chip: the true final score (OT/extra innings included).
   // For football this is display-only — Q4 above is what pays.
-  if (!soccerMode() && g.finalScore) {
+  const liveDone = liveState && liveState.gameId === g.id && liveState.done;
+  if (!soccerMode() && (g.finalScore || liveDone)) {
     anyContent = true;
+    const fs = g.finalScore || {
+      t: liveState.texasScore, o: liveState.oppScore,
+      periods: Math.max(liveState.texasLines.length, liveState.oppLines.length)
+    };
     const fin = el("div", "perChip hasWin finalInfo");
     fin.appendChild(el("span", "pcLabel", "FINAL"));
-    fin.appendChild(el("span", "pcScore", `${g.finalScore.t}–${g.finalScore.o}`));
-    const wentLong = (g.finalScore.periods || 0) > numPeriods();
+    fin.appendChild(el("span", "pcScore", `${fs.t}–${fs.o}`));
+    const wentLong = (fs.periods || 0) > numPeriods();
     fin.appendChild(el("span", "pcWho empty",
       mlbMode() ? "full game" : (wentLong ? "OT — Q4 pays" : "game over")));
     strip.appendChild(fin);
@@ -653,6 +671,10 @@ function renderBoard() {
 
   const winKey = liveWinningKey();
   const winCounts = winnerCountsForGame(g);
+  // Display-computed winners for finished-but-unrecorded periods ring too
+  displayPeriodResults(g || {}).forEach(r => {
+    if (!g.winners?.["q" + r.q]) winCounts.set(r.key, (winCounts.get(r.key) || 0) + 1);
+  });
 
   for (let r = 1; r <= GRID; r++) {
     const tr = el("tr");
@@ -1042,6 +1064,33 @@ function renderPot() {
 }
 
 /* ---------------- LIVE scores (ESPN) ---------------- */
+/* Safety net: if a game finished with no admin watching (so quarters never
+   auto-recorded), backfill it automatically the next time ANY power admin
+   simply loads the site. Runs once per session, a few seconds after boot. */
+let catchUpRan = false;
+function scheduleCatchUp() {
+  if (catchUpRan || !isPowerAdmin() || !games.length) return;
+  catchUpRan = true;
+  setTimeout(autoCatchUpGames, 3000);
+}
+async function autoCatchUpGames() {
+  const now = Date.now();
+  for (const g of games) {
+    if (g.finalScore) continue; // already fully recorded
+    const t = Date.parse((g.date || "") + "T00:00:00");
+    if (isNaN(t) || t > now) continue; // future game
+    try {
+      const eventId = await resolveEventId(g);
+      if (!eventId) continue;
+      const res = await fetch(`${espnBase()}/summary?event=${eventId}`);
+      const data = await res.json();
+      const comp = data?.header?.competitions?.[0];
+      if (!comp) continue;
+      if (comp.status?.type?.state !== "post") continue; // not finished (or in progress)
+      await autoRecordWinners(g, comp); // records missing periods + final; respects existing entries
+    } catch (_) { /* offline or ESPN hiccup — next session's sweep will get it */ }
+  }
+}
 function gameDateIsToday(g) {
   if (!g?.date) return false;
   const today = new Date();
@@ -1050,7 +1099,15 @@ function gameDateIsToday(g) {
 }
 function maybeStartLivePoll() {
   const g = currentGame();
-  if (g && (gameDateIsToday(g) || liveState?.inProgress)) startLivePoll();
+  if (!g) return;
+  if (gameDateIsToday(g) || liveState?.inProgress) { startLivePoll(); return; }
+  // Finished-but-unrecorded game: one-shot fetch so ANY viewer (admin or not)
+  // sees the full result — final score, quarter chips, winning squares —
+  // straight from ESPN, without waiting on an admin to record it
+  if (!g.finalScore) {
+    const t = Date.parse((g.date || "") + "T00:00:00");
+    if (!isNaN(t) && t < Date.now()) pullLive();
+  }
 }
 function startLivePoll() {
   stopLivePoll();
@@ -1262,6 +1319,37 @@ function liveWinningKey() {
   const oRow = g.oppDigits.indexOf(digitsOf(liveState.oppScore)) + 1;
   if (tCol < 1 || oRow < 1) return null;
   return oRow + "_" + tCol;
+}
+/* Completed-period results computed client-side from ESPN data — the same
+   math the recorder uses, so every viewer SEES results the moment they
+   exist, while the official ledger still comes from admin-recorded entries
+   (which override these on screen when present). */
+function displayPeriodResults(g) {
+  if (!liveState || liveState.gameId !== g?.id) return [];
+  if (!liveState.inProgress && !liveState.done) return [];
+  if (!g.texasDigits || !g.oppDigits) return [];
+  const out = [];
+  const done = liveState.done, cur = liveState.period;
+  for (let q = 1; q <= numPeriods(); q++) {
+    if (!done && cur <= q) break;             // period not finished yet
+    if (soccerMode() && q === 2 && !done) break; // soccer final includes ET
+    let t, o;
+    if (soccerMode() && q === 2) { t = liveState.texasScore; o = liveState.oppScore; }
+    else {
+      if (liveState.texasLines.length < q || liveState.oppLines.length < q) break;
+      t = liveState.texasLines.slice(0, q).reduce((a, b) => a + b, 0);
+      o = liveState.oppLines.slice(0, q).reduce((a, b) => a + b, 0);
+    }
+    const col = g.texasDigits.indexOf(digitsOf(t)) + 1;
+    const row = g.oppDigits.indexOf(digitsOf(o)) + 1;
+    if (col < 1 || row < 1) continue;
+    const key = row + "_" + col;
+    const sq = squares.get(key);
+    out.push({ q, t, o, key, empty: !sq,
+      squareName: sq ? sq.squareName : "tailgate",
+      email: sq ? sq.email : "" });
+  }
+  return out;
 }
 
 /* ---------------- ADMIN: lock / draw / scores ---------------- */
