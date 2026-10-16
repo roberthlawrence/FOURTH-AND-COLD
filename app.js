@@ -38,6 +38,17 @@ const periodLabel = (q) =>
   mlbMode() ? "INN " + q :
   "Q" + q; // Q4 pays end-of-regulation; the true final (incl. OT) shows as a separate FINAL chip
 const LIVE_POLL_MS = 60_000;
+/* ESPN kickoff timestamps are UTC, so a night game is already "tomorrow" in
+   UTC (7pm Central = 00:00Z next day). Read them as US-Eastern calendar days:
+   right for every Central/Eastern kickoff, and ESPN's TBD placeholder times
+   (midnight Eastern) land on the correct Saturday too. */
+function gameDayOf(iso) {
+  const t = Date.parse(iso || "");
+  if (isNaN(t) || !/T\d/.test(iso)) return (iso || "").slice(0, 10); // date-only: take as-is
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(new Date(t));
+}
 /* College season runs Aug–Jan; in Jan the "season" is still last year's */
 function seasonYear() {
   const now = new Date();
@@ -94,7 +105,7 @@ async function fetchWorldCupMatches() {
   events.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   return events.map(e => ({
     opponent: e.name || e.shortName || "Match",
-    date: (e.date || "").slice(0, 10),
+    date: gameDayOf(e.date),
     espnEventId: e.id
   }));
 }
@@ -216,6 +227,7 @@ function startListeners() {
     renderTabs(); renderBoard(); renderWinners(); renderAdminGame(); renderPot(); renderWinnerBanner();
     if (isAdmin()) renderPayoutsList();
     scheduleCatchUp();
+    healGameDates();
   });
   unsubPayouts = onSnapshot(collection(db, "payouts"), (qs) => {
     payouts.clear();
@@ -317,6 +329,30 @@ function onConfig() {
   }
   renderBoard(); renderMyPanel(); renderPot(); renderVenmo(); renderJukebox();
   scheduleCatchUp();
+  healGameDates();
+}
+
+/* Self-repair (power admin, once per visit): game dates saved from ESPN before
+   the night-game fix could be a day late. Re-derive each game's date from its
+   ESPN event and correct any that drifted — also catches ESPN reschedules. */
+let datesHealed = false;
+async function healGameDates() {
+  if (datesHealed || !isPowerAdmin() || sportMode() !== "cfb" || !games.length) return;
+  datesHealed = true;
+  try {
+    const data = await fetchTexasSchedule();
+    const byId = new Map((data.events || []).map(e => [String(e.id), e]));
+    for (const g of games) {
+      const ev = g.espnEventId ? byId.get(String(g.espnEventId)) : null;
+      if (!ev) continue;
+      const fixed = gameDayOf(ev.date);
+      if (fixed && fixed !== g.date) {
+        await updateDoc(doc(db, "games", g.id), { date: fixed });
+        audit("game.date-fix", `${g.opponent || g.id}: ${g.date || "(none)"} → ${fixed} (ESPN kickoff, night-game fix)`);
+        toast(`Fixed ${g.opponent || g.id} date → ${fixed}`);
+      }
+    }
+  } catch (_) { datesHealed = false; /* ESPN unreachable — try again next load */ }
 }
 
 /* Official SoundCloud embed — the song streams from SoundCloud (their
@@ -1141,11 +1177,11 @@ async function resolveEventId(g) {
     if (mlbMode()) {
       const res = await fetch(`${ESPN_ROOT}/baseball/mlb/teams/${MLB_TEAM_ID}/schedule`);
       const data = await res.json();
-      const ev = (data.events || []).find(e => (e.date || "").slice(0, 10) === g.date);
+      const ev = (data.events || []).find(e => gameDayOf(e.date) === g.date);
       return ev ? ev.id : null;
     }
     const data = await fetchTexasSchedule();
-    const ev = (data.events || []).find(e => (e.date || "").slice(0, 10) === g.date);
+    const ev = (data.events || []).find(e => gameDayOf(e.date) === g.date);
     return ev ? ev.id : null;
   } catch (_) { return null; }
 }
@@ -1175,7 +1211,7 @@ async function fetchRangersWindow() {
       .sort((a, b) => (a.date || "").localeCompare(b.date || ""))
       .map(e => ({
         opponent: e.shortName || e.name || "Game",
-        date: (e.date || "").slice(0, 10),
+        date: gameDayOf(e.date),
         espnEventId: e.id
       }));
   } catch (_) { return []; }
@@ -1907,7 +1943,7 @@ $("fetchScheduleBtn").onclick = async () => {
     }).map(e => {
       const c = e.competitions[0];
       const away = c.competitors.find(x => x.homeAway === "away");
-      return { opponent: away?.team?.shortDisplayName || away?.team?.abbreviation || "TBD", date: (e.date || "").slice(0, 10), espnEventId: e.id };
+      return { opponent: away?.team?.shortDisplayName || away?.team?.abbreviation || "TBD", date: gameDayOf(e.date), espnEventId: e.id };
     });
     if (!espnHomeGames.length) { toast("No home games found in ESPN schedule yet."); return; }
     // Pre-fill with the LAST N home games; use the dropdowns to swap any of them
